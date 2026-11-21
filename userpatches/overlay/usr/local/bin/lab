@@ -120,6 +120,7 @@ draw() {
   row " 10) Consola bettercap"
   row " 11) Escanear red local"
   row " 12) Herramientas (pack)"
+  row " 13) Elegir objetivo (RED)"
   row "  0) Salir (restaura managed)"
   line
   printf 'Opcion: '
@@ -472,6 +473,13 @@ herramientas_moderno() {
   done
 }
 
+elegir_objetivo() {
+  need_iface || return 0
+  clear 2>/dev/null || true
+  /usr/local/bin/objetivo
+  pause
+}
+
 modern_menu() {
   local op info
   while :; do
@@ -479,7 +487,7 @@ modern_menu() {
       "${SEL:-NINGUNA}" "$(mode_of)" "$(local_ip)" "$(cpu_temp)" "$CAPDIR")
     op=$(whiptail --backtitle "ArmLab WiFi - RK3318" \
       --title "RK3318 - ArmLab WiFi" \
-      --menu "$info" 22 64 14 \
+      --menu "$info" 23 64 15 \
       "1"  "Seleccionar interfaz Wi-Fi" \
       "2"  "Activar Modo Monitor" \
       "3"  "Restaurar Modo Managed" \
@@ -492,6 +500,7 @@ modern_menu() {
       "10" "Consola bettercap" \
       "11" "Escanear red local" \
       "12" "Herramientas (pack)" \
+      "13" "Elegir objetivo (RED)" \
       "0"  "Salir (restaura managed)" \
       3>&1 1>&2 2>&3) || { salir; return 0; }
     case "$op" in
@@ -507,6 +516,7 @@ modern_menu() {
       10) run_bettercap ;;
       11) run_nmap ;;
       12) herramientas_moderno ;;
+      13) elegir_objetivo ;;
       0) salir ;;
       *) printf '\n  Opcion no valida\n'; pause ;;
     esac
@@ -561,6 +571,7 @@ else
       10) run_bettercap ;;
       11) run_nmap ;;
       12) herramientas ;;
+      13) elegir_objetivo ;;
       0) salir ;;
       *) printf '\n  Opcion no valida\n'; pause ;;
     esac

@@ -1,0 +1,144 @@
+#!/bin/bash
+# objetivo - elegir la red objetivo (BSSID/canal) para auditoria en RK3318.
+# Uso: sudo objetivo   (o la opcion 13 del menu lab)
+# Nunca toca wlan0 ni eth0: solo usa el dongle RTL8814AU.
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+W=58
+CAPDIR=/root/capturas_wifi
+FILE="$CAPDIR/objetivo.txt"
+IFACE=''
+CSV=''
+declare -a BSSIDS=() CHANS=() PODER=() ESSIDS=()
+
+line() { printf '+%*s+\n' "$W" '' | tr ' ' '-'; }
+row()  { printf '| %-*s |\n' $((W-2)) "$1"; }
+cls()  { printf '\n\033[H\033[2J'; }
+pause(){ printf '\n  Pulsa Enter para continuar...'; read -r _ || true; printf '\n'; }
+
+get_iface() {
+  IFACE=$(/usr/local/bin/audit-iface 2>/dev/null || true)
+  case "$IFACE" in
+    ''|wlan0|eth0)
+      printf '\n  No hay dongle RTL8814AU disponible.\n'
+      pause
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+monitor_on() {
+  ip link set dev "$IFACE" up 2>/dev/null
+  iw dev "$IFACE" set type monitor 2>/dev/null || {
+    printf '\n  No se pudo poner %s en monitor.\n' "$IFACE"; pause; return 1; }
+  iw dev "$IFACE" set monitor otherbss fcsfail 2>/dev/null || true
+  # NO fijar canal: airodump-ng debe recorrer todos los canales.
+  return 0
+}
+
+do_scan() {
+  mkdir -p "$CAPDIR"
+  local base="$CAPDIR/objetivo-scan-$(date +%H%M%S)"
+  cls
+  line
+  row "ESCANEO DE OBJETIVOS  (${IFACE})"
+  line
+  printf '\n  Escaneando 22 s en 2,4/5 GHz ...\n'
+  {
+    ( timeout -s INT -k 3s 22s /usr/sbin/airodump-ng --band abg \
+        -w "$base" --output-format csv "$IFACE" </dev/null ) >/dev/null 2>&1
+  } 2>/dev/null || true
+  pkill -9 -x airodump-ng 2>/dev/null || true
+  CSV="$base-01.csv"
+  BSSIDS=(); CHANS=(); PODER=(); ESSIDS=()
+  if [ -f "$CSV" ]; then
+    while IFS='|' read -r b ch pw ss; do
+      BSSIDS+=("$b"); CHANS+=("$ch"); PODER+=("$pw"); ESSIDS+=("$ss")
+    done < <(awk -F, '
+      /^[[:space:]]*Station MAC/ { exit }
+      $1 ~ /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/ {
+        b=$1; ch=$4; pw=$9; ss=$14
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",b)
+        gsub(/[[:space:]]/,"",ch); gsub(/[[:space:]]/,"",pw)
+        gsub(/^[[:space:]]+|[[:space:]]+$/,"",ss)
+        if (ss=="") ss="(oculto)"
+        if (ch !~ /^[0-9]+$/) ch="?"
+        printf "%s|%s|%s|%s\n", b, ch, pw, ss
+      }' "$CSV")
+  fi
+  printf '  Redes encontradas: %s\n' "${#BSSIDS[@]}"
+  pause
+}
+
+show_targets() {
+  cls
+  line
+  row "SELECCIONAR OBJETIVO"
+  line
+  [ -f "$FILE" ] && row "Actual: $(sed -n 's/^ESSID=//p' "$FILE" | head -1)"
+  line
+  local i
+  if [ "${#BSSIDS[@]}" -eq 0 ]; then
+    row "  Sin redes. Usa la opcion 1 para escanear."
+    line
+    return 0
+  fi
+  for ((i=0; i<${#BSSIDS[@]}; i++)); do
+    row "$(printf '%2d) %-17s CH%-3s %4sdBm  %s' \
+      "$((i+1))" "${BSSIDS[$i]}" "${CHANS[$i]}" "${PODER[$i]}" "${ESSIDS[$i]}")"
+  done
+  line
+}
+
+choose() {
+  local k
+  while :; do
+    show_targets
+    printf 'Elige numero (1-%s), R=reescanear, 0=salir: ' "${#BSSIDS[@]}"
+    read -r k || return 0
+    case "$k" in
+      0|'') return 0 ;;
+      [Rr]*) do_scan; monitor_on || return 1 ;;
+      *)
+        if [[ "$k" =~ ^[0-9]+$ ]] && [ "$k" -ge 1 ] && [ "$k" -le "${#BSSIDS[@]}" ]; then
+          local i=$((k-1)) ch="${CHANS[$i]}"
+          mkdir -p "$CAPDIR"
+          {
+            printf 'BSSID=%s\n' "${BSSIDS[$i]}"
+            printf 'CH=%s\n' "$ch"
+            printf 'PWR=%s\n' "${PODER[$i]}"
+            printf 'ESSID=%s\n' "${ESSIDS[$i]}"
+            printf 'IFACE=%s\n' "$IFACE"
+            printf 'FECHA=%s\n' "$(date '+%F %T')"
+          } > "$FILE"
+          [ "$ch" != '?' ] && iw dev "$IFACE" set channel "$ch" 2>/dev/null || true
+          cls
+          line
+          row "OBJETIVO SELECCIONADO"
+          line
+          row "  BSSID : ${BSSIDS[$i]}"
+          row "  Canal : $ch"
+          row "  Red   : ${ESSIDS[$i]}"
+          row "  Guardado en $FILE"
+          line
+          pause
+          return 0
+        fi
+        printf '\n  Opcion no valida.\n'; pause
+        ;;
+    esac
+  done
+}
+
+main() {
+  get_iface || exit 1
+  monitor_on || exit 1
+  do_scan
+  choose
+  # Se deja en monitor y en el canal del objetivo para poder capturar.
+  printf '\n  %s sigue en modo %s.\n' "$IFACE" "$(iw dev "$IFACE" info 2>/dev/null | awk '/type /{print $2}')"
+  printf '  Objetivo: %s\n\n' "$(sed -n 's/^BSSID=//p' "$FILE" 2>/dev/null || echo '-')"
+}
+
+main "$@"
