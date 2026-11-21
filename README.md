@@ -7,7 +7,7 @@ Imagen personalizada de Armbian para **RK3318 TV Box** con escritorio monitoriza
 - **Armbian Trixie + XFCE**, kernel `current`, placa `rk3318-box`.
 - **Logo previo al escritorio** (`RK3318 · ArmLab WiFi · by DieGGaje`, 6 s).
 - **Widget Conky** en español: fecha, hora, temperatura, CPU, RAM, disco, carga, tiempo y localidad (una sola llamada a `wttr.in` cada 10 min).
-- **Menú `sudo lab`** con 12 opciones y ancho de 60 columnas.
+- **Menú `sudo lab`** con 13 opciones y ancho de 60 columnas: modo monitor, escaneo, **elegir objetivo**, **capturar handshake WPA**, Airgeddon, Wifite, Kismet, Bettercap y pack de herramientas.
 - **Pack de auditoría**: `nmap`, `tcpdump`, `tshark`, `john`, `crunch`, `hcxdumptool`, `hcxtools`, `aircrack-ng`, `kismet`, `reaver`, `bully`, `hashcat`, `lynis`, `bettercap` (si está disponible), más `airgeddon` y `wifite2` en `/opt/armlab/auditoria-wifi`.
 - **Driver DKMS `rtl8814au` 5.8.5.1** para el dongle USB Realtek `0bda:8813`.
 - **Servicios propios**: bootsplash, gobernador `performance`, subida de `wlx40`, guardia del driver y potencia TX 13 dBm.
@@ -82,6 +82,6 @@ userpatches/
 
 ## Notas legales
 
-Esta imagen es para **auditoría de redes propias o con autorización explícita**. El menú no incluye guardias ni avisos: el usuario es responsable de su uso.
+El menú no incluye guardias ni avisos: el usuario es responsable de su uso.
 
 `by DieGGaje`
