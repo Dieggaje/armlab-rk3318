@@ -45,7 +45,7 @@ git clone https://github.com/armbian/build.git
 cd build
 mkdir -p userpatches
 cp -a /ruta/este/repo/userpatches/. userpatches/
-./compile.sh config-armlab
+./compile.sh armlab
 ```
 
 ## Cómo instalar

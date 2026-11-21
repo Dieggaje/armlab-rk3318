@@ -28,7 +28,7 @@ jobs:
           armbian_release: trixie
           armbian_ui: xfce
           armbian_kernel_branch: current
-          armbian_config_name: config-armlab
+          armbian_config_name: armlab
           armbian_compress: sha,img,xz
           armbian_runner_clean: "yes"
           armbian_release_tag: armlab-rk3318-v1
