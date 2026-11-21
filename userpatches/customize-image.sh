@@ -17,8 +17,11 @@ cp -a /tmp/overlay/home/diego/. /etc/skel/
 rm -rf /home/diego
 
 echo "[ArmLab] Idioma, teclado y zona horaria..."
-locale-gen es_ES.UTF-8 >/dev/null 2>&1 || true
-update-locale LANG=es_ES.UTF-8 LC_ALL=es_ES.UTF-8 || true
+apt-get update -qq
+apt-get install -y --no-install-recommends locales || true
+printf 'es_ES.UTF-8 UTF-8\n' > /etc/locale.gen
+locale-gen es_ES.UTF-8 || true
+update-locale LANG=es_ES.UTF-8 LC_MESSAGES=es_ES.UTF-8 || true
 printf 'Europe/Madrid\n' > /etc/timezone
 ln -sf /usr/share/zoneinfo/Europe/Madrid /etc/localtime
 
@@ -28,10 +31,13 @@ sed -i 's|^127\.0\.1\.1.*|127.0.1.1\tarmlab-rk3318|' /etc/hosts || true
 
 echo "[ArmLab] Instalando pack de auditoria..."
 apt-get update -qq
-CORE="nmap tcpdump tshark john crunch hcxdumptool hcxtools aircrack-ng reaver bully hashcat kismet lynis figlet conky whiptail macchanger dkms build-essential curl git python3 net-tools wireless-tools iw"
+# Paquetes disponibles en Debian Trixie. 'conky' es virtual: usar conky-std.
+CORE="nmap tcpdump tshark john crunch hcxdumptool hcxtools aircrack-ng reaver bully hashcat lynis figlet conky-std whiptail macchanger dkms build-essential curl git python3 net-tools wireless-tools iw"
 apt-get install -y --no-install-recommends $CORE
-# Opcionales: si no estan en el repositorio, no rompen el build.
-apt-get install -y --no-install-recommends bettercap || echo "[ArmLab] AVISO: bettercap no disponible en este repositorio"
+# Opcionales: si no estan en el repositorio, avisan pero no rompen el build.
+for p in bettercap kismet; do
+    apt-get install -y --no-install-recommends "$p" || echo "[ArmLab] AVISO: $p no disponible en este repositorio"
+done
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
