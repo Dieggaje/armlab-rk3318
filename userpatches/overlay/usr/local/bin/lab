@@ -215,7 +215,7 @@ scan_live() {
   # El bloque con redirect evita el aviso "Killed" de Bash en pantalla.
   {
     ( timeout -s INT -k 3s 20s /usr/sbin/airodump-ng --band abg \
-        -w "$out" --output-format csv "$SEL" ) >/dev/null 2>&1
+        -w "$out" --output-format csv "$SEL" </dev/null ) >/dev/null 2>&1
   } 2>/dev/null || true
   pkill -9 -x airodump-ng 2>/dev/null || true
   csv="$out-01.csv"

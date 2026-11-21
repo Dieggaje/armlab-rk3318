@@ -234,7 +234,7 @@ capturar_red() {
   cap="$base-01.cap"
   printf 'Capturando en %s ...\n' "$base"
   airodump-ng -c "$CH" --bssid "$BSSID" -w "$base" "$IFACE" \
-    >"$base.airodump.log" 2>&1 &
+    </dev/null >"$base.airodump.log" 2>&1 &
   AIRO_PID=$!
   sleep 8
   if [ ! -f "$cap" ]; then
@@ -343,7 +343,7 @@ if [ -z "$BSSID" ]; then
   : > "$SCI.clients"
   : > "$SCI.sec"
   airodump-ng --band abg -w "$SCI" --output-format csv "$IFACE" \
-    >"$SCI.out" 2>&1 &
+    </dev/null >"$SCI.out" 2>&1 &
   AIRO_PID=$!
   sleep 3
 
