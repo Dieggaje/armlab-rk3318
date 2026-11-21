@@ -1,0 +1,6 @@
+#!/bin/sh
+# ArmLab WiFi: estado + temperatura desde la cache compartida.
+/usr/local/sbin/armlab-weather-cache
+C=$(cut -d'|' -f1 /tmp/armlab-weather.cache 2>/dev/null)
+T=$(cut -d'|' -f2 /tmp/armlab-weather.cache 2>/dev/null)
+if [ -n "$T" ]; then printf '%s %s' "$C" "$T"; else printf '%s' "$C"; fi

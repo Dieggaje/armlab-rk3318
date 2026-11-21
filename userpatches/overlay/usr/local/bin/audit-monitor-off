@@ -1,0 +1,10 @@
+#!/bin/sh
+# Vuelve a poner el adaptador RTL8814AU en modo gestionado (normal)
+IF=$(/usr/local/bin/audit-iface) || { echo "RTL8814AU no encontrado"; exit 1; }
+ip link set dev "$IF" down
+iw dev "$IF" set type managed
+ip link set dev "$IF" up
+ip link set dev "$IF" promisc off 2>/dev/null
+ip link set dev "$IF" allmulticast off 2>/dev/null
+echo "Monitor OFF: $IF (managed)"
+iw dev "$IF" info | grep -iE "type|ssid" | head -3

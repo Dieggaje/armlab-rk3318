@@ -1,0 +1,6 @@
+#!/bin/sh
+# Terminal visible para Chequeo de salud
+sudo /usr/local/bin/chequeo-box
+printf '\n'
+printf 'Pulsa Enter para cerrar esta ventana...\n'
+read -r _dummy

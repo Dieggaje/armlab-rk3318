@@ -1,0 +1,194 @@
+#!/usr/bin/env bash
+# generar-diccionario.sh - crea wordlists en /var/lib/armlab/wordlists
+# Interactivo: sudo generar-diccionario
+# Directo:     sudo generar-diccionario NOMBRE "palabra1,palabra2" [1|2]
+# Modo directo 1 = basico | 2 = completo (equivale a todas las opciones)
+
+set -u
+DIR=/var/lib/armlab/wordlists
+mkdir -p "$DIR"
+linea() { printf -- '------------------------------------------------------------\n'; }
+marca() { [ "$1" -eq 1 ] && printf 'X' || printf ' '; }
+
+NOMBRE="${1:-}"
+BASES="${2:-}"
+MODO="${3:-2}"
+
+BASE=1; CASE=1; NUM=1; SYM=1; LEET=1; YEARS=1; COMMON=1
+MIN=0; MAX=0
+
+if [ -z "$NOMBRE" ] || [ -z "$BASES" ]; then
+  linea
+  printf 'GENERADOR DE DICCIONARIOS\n'
+  linea
+  printf 'Nombre del archivo [diccionario-%s]: ' "$(date +%Y%m%d-%H%M%S)"
+  read -r RESP || RESP=""
+  NOMBRE="${RESP:-diccionario-$(date +%Y%m%d-%H%M%S)}"
+
+  printf 'Palabras base separadas por comas (ej: Ponte,casa,maria): '
+  IFS= read -r BASES || BASES=""
+  BASES="${BASES:-Ponte,casa}"
+
+  menu_opciones() {
+    local op n v
+    while :; do
+      printf '\033[H\033[2J'
+      linea
+      printf 'CONFIGURACION DEL DICCIONARIO\n'
+      linea
+      printf ' 1) Palabras base            [%s]\n' "$(marca "$BASE")"
+      printf ' 2) Variantes de caso        [%s]  minusculas / MAYUSCULAS / Capitalizado\n' "$(marca "$CASE")"
+      printf ' 3) Numeros                  [%s]  123, 1234, 0-9, etc.\n' "$(marca "$NUM")"
+      printf ' 4) Simbolos                 [%s]  ! @ # . _ -\n' "$(marca "$SYM")"
+      printf ' 5) Leet speak               [%s]  a=4 e=3 i=1 o=0 s=5\n' "$(marca "$LEET")"
+      printf ' 6) Anos 1990-2026           [%s]\n' "$(marca "$YEARS")"
+      printf ' 7) Contraseñas comunes      [%s]\n' "$(marca "$COMMON")"
+      printf ' 8) Longitud minima          : %s\n' "$MIN"
+      printf ' 9) Longitud maxima          : %s  (0=sin limite)\n' "$MAX"
+      printf ' 0) Cambiar palabras base    : %s\n' "$BASES"
+      linea
+      printf 'Escribe varias opciones juntas (ej: "2 4 8") y Enter.\n'
+      printf 'Escribe G y Enter para generar.\n'
+      linea
+      printf 'Opciones: '
+      read -r op || op=""
+      case "$op" in
+        [Gg]*) break ;;
+      esac
+      for n in $op; do
+        case "$n" in
+          1) BASE=$((1-BASE)) ;;
+          2) CASE=$((1-CASE)) ;;
+          3) NUM=$((1-NUM)) ;;
+          4) SYM=$((1-SYM)) ;;
+          5) LEET=$((1-LEET)) ;;
+          6) YEARS=$((1-YEARS)) ;;
+          7) COMMON=$((1-COMMON)) ;;
+          8) printf 'Longitud minima (0=sin limite) [%s]: ' "$MIN"; read -r v || v=""
+             [[ "$v" =~ ^[0-9]+$ ]] && MIN=$v ;;
+          9) printf 'Longitud maxima (0=sin limite) [%s]: ' "$MAX"; read -r v || v=""
+             [[ "$v" =~ ^[0-9]+$ ]] && MAX=$v ;;
+          0) printf 'Nuevas palabras base [%s]: ' "$BASES"; read -r v || v=""
+             [ -n "$v" ] && BASES="$v" ;;
+        esac
+      done
+    done
+  }
+  menu_opciones
+else
+  if [ "$MODO" = "1" ]; then
+    BASE=1; CASE=1; NUM=1; SYM=0; LEET=0; YEARS=0; COMMON=0
+  else
+    BASE=1; CASE=1; NUM=1; SYM=1; LEET=1; YEARS=1; COMMON=1
+  fi
+  MIN=0; MAX=0
+fi
+
+if [ "$MAX" -gt 0 ] && [ "$MAX" -lt "$MIN" ]; then
+  printf 'Longitud maxima menor que la minima: se ignora la maxima.\n'
+  MAX=0
+fi
+if [ "$BASE" -eq 0 ] && [ "$COMMON" -eq 0 ]; then
+  printf 'Aviso: sin palabras base ni comunes, el diccionario podria quedar vacio.\n'
+fi
+
+NOMBRE=$(printf '%s' "$NOMBRE" | tr -cd '[:alnum:]_-')
+[ -n "$NOMBRE" ] || NOMBRE="diccionario-$(date +%Y%m%d-%H%M%S)"
+DEST="$DIR/$NOMBRE.txt"
+if [ -e "$DEST" ]; then
+  DEST="$DIR/${NOMBRE}-$(date +%H%M%S).txt"
+fi
+
+IFS=',' read -ra PAL <<<"$BASES"
+for i in "${!PAL[@]}"; do
+  PAL[$i]=$(printf '%s' "${PAL[$i]}" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+done
+
+TMP=$(mktemp)
+: > "$TMP"
+add() { [ -n "$1" ] && printf '%s\n' "$1" >> "$TMP"; }
+
+leet() {
+  printf '%s' "$1" | sed \
+    -e 's/a/4/g' -e 's/A/4/g' -e 's/e/3/g' -e 's/E/3/g' \
+    -e 's/i/1/g' -e 's/I/1/g' -e 's/o/0/g' -e 's/O/0/g' \
+    -e 's/s/5/g' -e 's/S/5/g'
+}
+
+NUM_LIST=(123 1234 12345 123456 0 1 2 7 12 21 69 100 1234567)
+SIMB=('!' '@' '#' '.' '_' '-')
+COMMON_LIST=(
+  password Password123 Password1 123456 12345678 123456789 1234567890
+  qwerty qwerty123 admin admin123 administrator letmein welcome
+  test test123 prueba wifi wifi123 casa casa123 casa5g
+  000000 111111 222222 654321 123123 abc123 iloveyou monkey dragon
+)
+
+for p in "${PAL[@]}"; do
+  [ -n "$p" ] || continue
+  if [ "$BASE" -eq 1 ]; then
+    add "$p"
+    if [ "$CASE" -eq 1 ]; then
+      add "$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
+      add "$(printf '%s' "$p" | tr '[:lower:]' '[:upper:]')"
+      add "$(printf '%s' "$p" | sed 's/./\u&/')"
+    fi
+    if [ "$NUM" -eq 1 ]; then
+      for n in "${NUM_LIST[@]}"; do
+        add "${p}${n}"
+        add "${p}${n}!"
+        add "${n}${p}"
+      done
+    fi
+    if [ "$SYM" -eq 1 ]; then
+      for s in "${SIMB[@]}"; do
+        add "${p}${s}"
+        for n in 123 1234 2024 2025 2026; do
+          add "${p}${s}${n}"
+        done
+      done
+    fi
+    if [ "$LEET" -eq 1 ]; then
+      L=$(leet "$p")
+      add "$L"
+      add "${L}123"
+      add "${L}!"
+    fi
+    if [ "$YEARS" -eq 1 ]; then
+      for y in $(seq 1990 2026); do
+        add "${p}${y}"
+        add "${y}${p}"
+        add "${p}${y}!"
+        add "${p}_${y}"
+        add "${p}-${y}"
+      done
+    fi
+  fi
+done
+
+if [ "$COMMON" -eq 1 ]; then
+  for w in "${COMMON_LIST[@]}"; do add "$w"; done
+fi
+
+awk -v min="$MIN" -v max="$MAX" '
+  NF && length($0) >= min && (max == 0 || length($0) <= max) && !visto[$0]++
+' "$TMP" > "$DEST"
+rm -f "$TMP"
+chmod 644 "$DEST"
+chown diego:diego "$DEST" 2>/dev/null || true
+ln -sfn "$DEST" "$DIR/latest.txt"
+chown -h diego:diego "$DIR/latest.txt" 2>/dev/null || true
+
+linea
+printf 'Creado : %s\n' "$DEST"
+printf 'Lineas : %s\n' "$(wc -l < "$DEST")"
+printf 'Base   : %s\n' "$BASES"
+printf 'Filtro : longitud %s..%s\n' "$MIN" "$([ "$MAX" -eq 0 ] && echo '∞' || echo "$MAX")"
+printf 'Opciones: base=%s caso=%s nums=%s simb=%s leet=%s años=%s comunes=%s\n' \
+  "$BASE" "$CASE" "$NUM" "$SYM" "$LEET" "$YEARS" "$COMMON"
+printf 'latest : %s\n' "$DIR/latest.txt"
+linea
+printf 'Primeras 10 entradas:\n'
+head -10 "$DEST"
+linea
+exit 0

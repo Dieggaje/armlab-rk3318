@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Auditoria WiFi - Todas las redes
+GenericName=Auditoria WiFi
+Comment=Escanea, detecta clientes, captura y analiza TODAS las redes (incluidas ocultas)
+Exec=/usr/local/bin/capturar-crack-desktop
+Icon=nmap
+Terminal=false
+StartupNotify=true
+Categories=Network;
+Keywords=wifi;auditoria;handshake;aircrack;diccionario;crack;ocultas;

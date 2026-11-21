@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Conky - Monitor del sistema
+Comment=Widget de escritorio con temperatura, CPU, RAM y disco
+Exec=/usr/bin/conky -c /home/diego/.conkyrc
+Hidden=false
+NoDisplay=true
+Terminal=false
+X-GNOME-Autostart-enabled=true

@@ -1,0 +1,1 @@
+ACTION=="add", SUBSYSTEM=="net", DRIVERS=="rtl8814au", TAG+="systemd", ENV{SYSTEMD_WANTS}+="8814au-txpower.service"

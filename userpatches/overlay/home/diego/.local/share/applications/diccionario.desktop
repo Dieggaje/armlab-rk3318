@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Generar Diccionario
+GenericName=Crear wordlist
+Comment=Crea diccionarios personalizados en /var/lib/armlab/wordlists
+Exec=/usr/local/bin/generar-diccionario-desktop
+Icon=accessories-dictionary
+Terminal=false
+StartupNotify=true
+Categories=Network;
+Keywords=wifi;diccionario;wordlist;aircrack;

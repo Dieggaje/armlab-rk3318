@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lanzador de escritorio para Generar Diccionario en el RK3318
+exec /usr/bin/xfce4-terminal \
+  --title="GENERAR DICCIONARIO - RK3318" \
+  --geometry=90x26 \
+  --command=/usr/local/bin/generar-diccionario-terminal

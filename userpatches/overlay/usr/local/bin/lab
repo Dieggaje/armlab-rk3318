@@ -1,0 +1,568 @@
+#!/bin/bash
+# lab - menu WiFi para RK3318 (estilo Airgeddon, 60 columnas)
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+W=58
+CAPDIR=/root/capturas_wifi
+AIRGEDDON=/opt/armlab/auditoria-wifi/airgeddon/airgeddon.sh
+WIFITE=/usr/local/bin/wifite
+
+SEL=$(/usr/local/bin/audit-iface 2>/dev/null || true)
+ORIGMAC=''
+remember_origmac() {
+  ORIGMAC=''
+  [ -n "$SEL" ] || return 0
+  ORIGMAC=$(cat "/sys/class/net/$SEL/address" 2>/dev/null || true)
+}
+remember_origmac
+
+permanent_mac() {
+  local m
+  m=$(ethtool -P "$SEL" 2>/dev/null | awk '/Permanent address/{print $3}')
+  [ -n "$m" ] || m=$(sed -n 's/^MACAddress=//p' \
+    /etc/systemd/network/10-wlx40.link 2>/dev/null | head -1)
+  [ -n "$m" ] || m=$ORIGMAC
+  printf '%s' "$m"
+}
+
+line() { printf '+%*s+\n' "$W" '' | tr ' ' '-'; }
+row()  { printf '| %-*s |\n' $((W-2)) "$1"; }
+cls()  { printf '\n\033[H\033[2J'; }
+pause(){ printf '\n  Pulsa Enter para continuar...'; read -r _ || true; printf '\n'; }
+
+local_ip() {
+  local ip
+  ip=$(ip -4 -o addr show wlan0 2>/dev/null | awk '{split($4,a,"/");print a[1]}')
+  [ -n "$ip" ] || ip=$(ip route get 1.1.1.1 2>/dev/null |
+    sed -n 's/.* src \([0-9.]*\).*/\1/p')
+  [ -n "$ip" ] || ip=127.0.0.1
+  printf '%s' "$ip"
+}
+
+primary_if() {
+  local p
+  p=$(ip route get 1.1.1.1 2>/dev/null |
+    sed -n 's/.* dev \([^ ]*\).*/\1/p')
+  [ -n "$p" ] || p=wlan0
+  printf '%s' "$p"
+}
+
+mode_of() {
+  [ -n "$SEL" ] || { printf '-'; return; }
+  iw dev "$SEL" info 2>/dev/null |
+    awk '/^[[:space:]]*type /{print $2; exit}'
+}
+
+cpu_temp() {
+  awk '{printf "%.1fC", $1/1000}' \
+    /sys/class/thermal/thermal_zone0/temp 2>/dev/null || printf '?'
+}
+
+need_iface() {
+  # El USB puede desconectarse/reconectarse con el menu abierto.
+  if [ -z "$SEL" ] || [ ! -d "/sys/class/net/$SEL" ]; then
+    SEL=$(/usr/local/bin/audit-iface 2>/dev/null || true)
+    [ -n "$SEL" ] && remember_origmac
+  fi
+  if [ -z "$SEL" ]; then
+    printf '\n  Selecciona primero la interfaz (opcion 1)\n'
+    pause
+    return 1
+  fi
+  if [ "$SEL" = wlan0 ] || [ "$SEL" = eth0 ] ||
+     [ "$SEL" = "$(primary_if)" ]; then
+    printf '\n  Interfaz protegida; no se puede usar\n'
+    pause
+    return 1
+  fi
+  return 0
+}
+
+restore() {
+  [ -n "$SEL" ] || return 0
+  [ -d "/sys/class/net/$SEL" ] || return 0
+  ip link set dev "$SEL" down 2>/dev/null
+  iw dev "$SEL" set type managed 2>/dev/null
+  ip link set dev "$SEL" up 2>/dev/null
+  ip link set dev "$SEL" promisc off 2>/dev/null
+  ip link set dev "$SEL" allmulticast off 2>/dev/null
+  return 0
+}
+
+# Ejecuta un comando interactivo en segundo plano; Ctrl+C lo detiene
+# sin matar el menu, para poder seguir con el flujo (conversion, etc.).
+run_int_wrapper() {
+  "$@" &
+  local pid=$!
+  trap 'kill -INT "$pid" 2>/dev/null || true' INT
+  wait "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  trap - INT
+}
+
+draw() {
+  cls
+  line
+  row "RK3318 - ArmLab WiFi  (60 cols)"
+  row "IF: ${SEL:-NINGUNA}  MOD: $(mode_of)"
+  row "IP: $(local_ip)   CPU: $(cpu_temp)"
+  row "CAP: $CAPDIR"
+  line
+  row "  1) Seleccionar interfaz Wi-Fi"
+  row "  2) Activar Modo Monitor"
+  row "  3) Restaurar Modo Managed"
+  row "  4) Aleatorizar MAC"
+  row "  5) Escaneo 2.4/5 GHz"
+  row "  6) Captura PMKID/Handshake"
+  row "  7) Auditoria (wifite)"
+  row "  8) Suite airgeddon.sh"
+  row "  9) Servidor web Kismet"
+  row " 10) Consola bettercap"
+  row " 11) Escanear red local"
+  row " 12) Herramientas (pack)"
+  row "  0) Salir (restaura managed)"
+  line
+  printf 'Opcion: '
+}
+
+select_iface() {
+  cls
+  line
+  row "SELECCIONAR INTERFAZ WI-FI"
+  line
+  local d n drv tag i=0 k cand primary
+  local -a opts=()
+  primary=$(primary_if)
+  for d in /sys/class/net/*; do
+    n=${d##*/}
+    case "$n" in lo|docker0|br-*|veth*|tailscale0|p2p-dev*) continue;; esac
+    drv=$(basename "$(readlink -f "$d/device/driver" 2>/dev/null)" 2>/dev/null)
+    [ -n "$drv" ] || continue
+    [ "$drv" = "/" ] && drv='-'
+    i=$((i+1))
+    opts+=("$n")
+    tag=''
+    if [ "$n" = "$primary" ] || [ "$n" = wlan0 ] || [ "$n" = eth0 ]; then
+      tag=' [PROTEGIDA]'
+    fi
+    row "$(printf '%2d) %-16s %-12s%s' "$i" "$n" "$drv" "$tag")"
+  done
+  line
+  row "PROTEGIDA = tu SSH, no se usa"
+  printf 'Elige numero (Enter=cancelar): '
+  read -r k || true
+  [ -z "$k" ] && return 0
+  if [[ "$k" =~ ^[0-9]+$ ]] && [ "$k" -ge 1 ] && [ "$k" -le "$i" ]; then
+    cand=${opts[$((k-1))]}
+    if [ "$cand" = "$primary" ] || [ "$cand" = wlan0 ] ||
+       [ "$cand" = eth0 ]; then
+      printf '\n  No se puede usar la interfaz principal.\n'
+      pause
+      return 0
+    fi
+    SEL=$cand
+    remember_origmac
+    printf '\n  Interfaz seleccionada: %s\n' "$SEL"
+    pause
+  fi
+}
+
+mon_on() {
+  need_iface || return 0
+  local ch
+  printf 'Canal [11]: '
+  read -r ch || true
+  ch=${ch:-11}
+  ip link set "$SEL" up 2>/dev/null
+  iw dev "$SEL" set type monitor || { pause; return 0; }
+  iw dev "$SEL" set monitor otherbss fcsfail || { pause; return 0; }
+  iw dev "$SEL" set channel "$ch" || { pause; return 0; }
+  printf '\n  Monitor ON: %s  canal %s\n' "$SEL" "$ch"
+  pause
+}
+
+mon_off() {
+  need_iface || return 0
+  restore
+  printf '\n  Managed OK: %s  (%s)\n' "$SEL" "$(mode_of)"
+  pause
+}
+
+random_mac() {
+  need_iface || return 0
+  ip link set dev "$SEL" down || { pause; return 0; }
+  macchanger -r "$SEL" || { ip link set dev "$SEL" up; pause; return 0; }
+  ip link set dev "$SEL" up
+  printf '\n  MAC actual: %s\n' \
+    "$(cat "/sys/class/net/$SEL/address" 2>/dev/null)"
+  printf '  (se restaura al salir)\n'
+  pause
+}
+
+scan_live() {
+  need_iface || return 0
+  [ "$(mode_of)" = monitor ] || {
+    printf '\n  Activa antes el Modo Monitor (opcion 2)\n'
+    pause
+    return 0
+  }
+  mkdir -p "$CAPDIR"
+  local out csv
+  out="$CAPDIR/scan-$(date +%H%M%S)"
+  printf '\n  Escaneando 20s ...\n'
+  # -k garantiza que un airodump colgado no bloquee el menu.
+  # El bloque con redirect evita el aviso "Killed" de Bash en pantalla.
+  {
+    ( timeout -s INT -k 3s 20s /usr/sbin/airodump-ng --band abg \
+        -w "$out" --output-format csv "$SEL" ) >/dev/null 2>&1
+  } 2>/dev/null || true
+  pkill -9 -x airodump-ng 2>/dev/null || true
+  csv="$out-01.csv"
+  if [ -f "$csv" ]; then
+    printf '\n  CSV: %s\n' "$csv"
+  else
+    printf '\n  No se genero CSV (escaneo sin resultados)\n'
+  fi
+  pause
+}
+
+capture_passive() {
+  need_iface || return 0
+  mkdir -p "$CAPDIR"
+  local ch band base
+  local -a chargs=(-F)
+  printf 'Canal (0=todos) [0]: '
+  read -r ch || true
+  ch=${ch:-0}
+  if ! [[ "$ch" =~ ^[0-9]+$ ]]; then
+    printf '\n  Canal no valido\n'
+    pause
+    return 0
+  fi
+  base="$CAPDIR/hcx-$(date +%Y%m%d-%H%M%S)"
+  if [ "$ch" != 0 ]; then
+    band=a
+    [ "$ch" -gt 14 ] && band=b
+    chargs=(-c "${ch}${band}")
+  fi
+  printf '\n  Capturando ... Ctrl+C convierte a .22000\n'
+  run_int_wrapper /usr/bin/hcxdumptool -i "$SEL" -w "$base.pcapng" \
+    "${chargs[@]}" --rds=1 \
+    --disable_deauthentication --disable_proberequest \
+    --disable_association --disable_reassociation \
+    --attemptapmax=0
+  printf '\n  Convirtiendo a hc22000 ...\n'
+  /usr/bin/hcxpcapngtool -o "$base.22000" "$base.pcapng" \
+    > "$base.conv.log" 2>&1
+  printf '  pcapng : %s\n  22000  : %s\n' "$base.pcapng" "$base.22000"
+  if [ -f "$base.22000" ]; then
+    printf '  hashes : %s\n' "$(wc -l < "$base.22000")"
+  else
+    printf '  hashes : 0 (sin capturas utiles; ver .conv.log)\n'
+  fi
+  pause
+}
+
+run_wifite() {
+  need_iface || return 0
+  printf '\n  wifite en %s\n' "$SEL"
+  if [ -x "$WIFITE" ]; then
+    "$WIFITE" -i "$SEL"
+  else
+    printf '  No existe %s\n' "$WIFITE"
+  fi
+  pause
+}
+
+run_airgeddon() {
+  if [ ! -f "$AIRGEDDON" ]; then
+    printf '\n  No existe %s\n' "$AIRGEDDON"
+    pause
+    return 0
+  fi
+  ( cd "$(dirname "$AIRGEDDON")" && bash ./airgeddon.sh )
+  pause
+}
+
+run_kismet() {
+  need_iface || return 0
+  [ "$(mode_of)" = monitor ] && restore
+  printf '\n  Kismet: http://%s:2501\n' "$(local_ip)"
+  printf '  Ctrl+C para detener el servidor\n'
+  run_int_wrapper /usr/bin/kismet -c "$SEL" --no-ncurses
+  pause
+}
+
+run_bettercap() {
+  need_iface || return 0
+  /usr/bin/bettercap -iface "$SEL"
+  pause
+}
+
+run_nmap() {
+  local base net r
+  base=$(local_ip)
+  net="${base%.*}.0/24"
+  printf 'Red a escanear [%s]: ' "$net"
+  read -r r || true
+  r=${r:-$net}
+  printf '\n  nmap -sn %s\n' "$r"
+  /usr/bin/nmap -sn "$r"
+  pause
+}
+
+run_tcpdump() {
+  if [ -z "$SEL" ]; then
+    printf '\n  Selecciona primero la interfaz (opcion 1)\n'
+    pause
+    return 0
+  fi
+  local s
+  printf 'Segundos [15]: '
+  read -r s || true
+  s=${s:-15}
+  if ! [[ "$s" =~ ^[0-9]+$ ]]; then
+    printf '\n  Segundos no validos\n'
+    pause
+    return 0
+  fi
+  printf '\n  tcpdump en %s (%ss) ... Ctrl+C para cortar\n' "$SEL" "$s"
+  timeout -s INT -k 2s "${s}s" /usr/bin/tcpdump -i "$SEL" -nn
+  pause
+}
+
+run_tshark() {
+  mkdir -p "$CAPDIR"
+  local -a CAPS=()
+  mapfile -t CAPS < <(find "$CAPDIR" -maxdepth 1 -type f \
+    \( -name '*.cap' -o -name '*.pcapng' \) -printf '%f\n' 2>/dev/null \
+    | sort -r)
+  if [ "${#CAPS[@]}" -eq 0 ]; then
+    printf '\n  No hay capturas .cap/.pcapng en %s\n' "$CAPDIR"
+    pause
+    return 0
+  fi
+  cls
+  line
+  row "ANALIZAR CAPTURA CON TSHARK"
+  line
+  local i=1 f k cap
+  for f in "${CAPS[@]}"; do
+    row "$(printf '%2d) %s' "$i" "$f")"
+    i=$((i+1))
+  done
+  line
+  printf 'Elige captura [1]: '
+  read -r k || true
+  k=${k:-1}
+  if ! [[ "$k" =~ ^[0-9]+$ ]] || [ "$k" -lt 1 ] || [ "$k" -gt "${#CAPS[@]}" ]; then
+    printf '\n  Seleccion no valida\n'
+    pause
+    return 0
+  fi
+  cap="$CAPDIR/${CAPS[$((k-1))]}"
+  printf '\n  Captura: %s\n' "$cap"
+  /usr/bin/tshark -r "$cap" -q -z io,phs 2>/dev/null | head -30
+  printf '\n  Primeros paquetes:\n'
+  /usr/bin/tshark -r "$cap" 2>/dev/null | head -15
+  pause
+}
+
+run_john() {
+  local f
+  printf 'Fichero de hashes (Enter=cancelar): '
+  read -r f || true
+  [ -n "$f" ] || return 0
+  if [ ! -r "$f" ]; then
+    printf '\n  No se puede leer: %s\n' "$f"
+    pause
+    return 0
+  fi
+  /usr/sbin/john "$f"
+  pause
+}
+
+run_crunch() {
+  local min max charset out
+  printf 'Longitud minima [8]: '
+  read -r min || true
+  min=${min:-8}
+  printf 'Longitud maxima [10]: '
+  read -r max || true
+  max=${max:-10}
+  printf 'Caracteres [abc...0123456789]: '
+  read -r charset || true
+  charset=${charset:-abcdefghijklmnopqrstuvwxyz0123456789}
+  if ! [[ "$min" =~ ^[0-9]+$ && "$max" =~ ^[0-9]+$ ]] ||
+     [ "$min" -lt 1 ] || [ "$max" -lt "$min" ]; then
+    printf '\n  Longitudes no validas\n'
+    pause
+    return 0
+  fi
+  out="/var/lib/armlab/wordlists/crunch-$(date +%Y%m%d-%H%M%S).txt"
+  mkdir -p "$(dirname "$out")"
+  printf '\n  Generando wordlist manual (puede tardar si el rango es grande)...\n'
+  /usr/bin/crunch "$min" "$max" "$charset" -o "$out"
+  chown diego:diego "$out" 2>/dev/null || true
+  printf '  Creado: %s\n  Lineas: %s\n' "$out" "$(wc -l < "$out" 2>/dev/null)"
+  pause
+}
+
+run_lynis() {
+  printf '\n  lynis audit system --quick ...\n'
+  /usr/sbin/lynis audit system --quick
+  pause
+}
+
+herramientas() {
+  local op
+  while :; do
+    cls
+    line
+    row "HERRAMIENTAS - RK3318 | ArmLab WiFi"
+    line
+    row "  1) tcpdump  - capturar trafico"
+    row "  2) tshark   - analizar .cap"
+    row "  3) john     - crackear hashes"
+    row "  4) crunch   - wordlist manual"
+    row "  5) lynis    - auditoria del box"
+    row "  6) nmap     - escanear red local"
+    row "  0) Volver al menu principal"
+    line
+    printf 'Opcion: '
+    op=""
+    read -r op || op=0
+    case "$op" in
+      1) run_tcpdump ;;
+      2) run_tshark ;;
+      3) run_john ;;
+      4) run_crunch ;;
+      5) run_lynis ;;
+      6) run_nmap ;;
+      0|'') return 0 ;;
+      *) printf '\n  Opcion no valida\n'; pause ;;
+    esac
+  done
+}
+
+herramientas_moderno() {
+  local op
+  while :; do
+    op=$(whiptail --backtitle "ArmLab WiFi - RK3318" \
+      --title "HERRAMIENTAS - RK3318 | ArmLab WiFi" \
+      --menu "Pack instalado:" 17 58 8 \
+      "1" "tcpdump  - capturar trafico" \
+      "2" "tshark   - analizar .cap" \
+      "3" "john     - crackear hashes" \
+      "4" "crunch   - wordlist manual" \
+      "5" "lynis    - auditoria del box" \
+      "6" "nmap     - escanear red local" \
+      "0" "Volver al menu principal" \
+      3>&1 1>&2 2>&3) || return 0
+    case "$op" in
+      1) run_tcpdump ;;
+      2) run_tshark ;;
+      3) run_john ;;
+      4) run_crunch ;;
+      5) run_lynis ;;
+      6) run_nmap ;;
+      0) return 0 ;;
+      *) printf '\n  Opcion no valida\n'; pause ;;
+    esac
+  done
+}
+
+modern_menu() {
+  local op info
+  while :; do
+    info=$(printf 'IF: %s  MOD: %s\nIP: %s   CPU: %s\nCAP: %s' \
+      "${SEL:-NINGUNA}" "$(mode_of)" "$(local_ip)" "$(cpu_temp)" "$CAPDIR")
+    op=$(whiptail --backtitle "ArmLab WiFi - RK3318" \
+      --title "RK3318 - ArmLab WiFi" \
+      --menu "$info" 22 64 14 \
+      "1"  "Seleccionar interfaz Wi-Fi" \
+      "2"  "Activar Modo Monitor" \
+      "3"  "Restaurar Modo Managed" \
+      "4"  "Aleatorizar MAC" \
+      "5"  "Escaneo 2.4/5 GHz" \
+      "6"  "Captura PMKID/Handshake" \
+      "7"  "Auditoria (wifite)" \
+      "8"  "Suite airgeddon.sh" \
+      "9"  "Servidor web Kismet" \
+      "10" "Consola bettercap" \
+      "11" "Escanear red local" \
+      "12" "Herramientas (pack)" \
+      "0"  "Salir (restaura managed)" \
+      3>&1 1>&2 2>&3) || { salir; return 0; }
+    case "$op" in
+      1) select_iface ;;
+      2) mon_on ;;
+      3) mon_off ;;
+      4) random_mac ;;
+      5) scan_live ;;
+      6) capture_passive ;;
+      7) run_wifite ;;
+      8) run_airgeddon ;;
+      9) run_kismet ;;
+      10) run_bettercap ;;
+      11) run_nmap ;;
+      12) herramientas_moderno ;;
+      0) salir ;;
+      *) printf '\n  Opcion no valida\n'; pause ;;
+    esac
+  done
+}
+
+salir() {
+  trap - EXIT
+  restore
+  if [ -n "$SEL" ] && [ -d "/sys/class/net/$SEL" ]; then
+    local cur want
+    want=$(permanent_mac)
+    cur=$(cat "/sys/class/net/$SEL/address" 2>/dev/null || true)
+    if [ -n "$want" ] && [ -n "$cur" ] && [ "$cur" != "$want" ]; then
+      ip link set dev "$SEL" down 2>/dev/null
+      ip link set dev "$SEL" address "$want" 2>/dev/null
+      ip link set dev "$SEL" up 2>/dev/null
+      ip link set dev "$SEL" promisc off 2>/dev/null
+      ip link set dev "$SEL" allmulticast off 2>/dev/null
+    fi
+  fi
+  cls
+  line
+  row "Interfaz restaurada a managed."
+  row "Hasta luego."
+  line
+  exit 0
+}
+
+trap restore EXIT
+trap 'restore; exit 0' TERM HUP
+mkdir -p "$CAPDIR" 2>/dev/null
+
+if command -v whiptail >/dev/null 2>&1 &&
+   { { [ -t 0 ] && [ -t 1 ]; } || [ "${LAB_MODERN:-0}" = 1 ]; }; then
+  modern_menu
+else
+  # Modo clasico (60 columnas) para scripts o terminales sin curses.
+  while :; do
+    draw
+    if ! read -r op; then salir; fi
+    case "$op" in
+      1) select_iface ;;
+      2) mon_on ;;
+      3) mon_off ;;
+      4) random_mac ;;
+      5) scan_live ;;
+      6) capture_passive ;;
+      7) run_wifite ;;
+      8) run_airgeddon ;;
+      9) run_kismet ;;
+      10) run_bettercap ;;
+      11) run_nmap ;;
+      12) herramientas ;;
+      0) salir ;;
+      *) printf '\n  Opcion no valida\n'; pause ;;
+    esac
+  done
+fi

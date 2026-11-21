@@ -1,0 +1,10 @@
+[Unit]
+Description=Fijar TX power del RTL8814AU a 13 dBm
+After=sys-subsystem-net-devices-wlx40.device
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/8814au-txpower.sh
+
+[Install]
+WantedBy=multi-user.target

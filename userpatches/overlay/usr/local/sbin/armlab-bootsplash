@@ -1,0 +1,31 @@
+#!/bin/bash
+# ArmLab WiFi - logo previo al escritorio (antes de LightDM)
+CONSOLE=${ARMLAB_CONSOLE:-/dev/tty1}
+if [ -n "${ARMLAB_CONSOLE:-}" ]; then
+  : >"$CONSOLE" 2>/dev/null || CONSOLE=/dev/console
+elif [ ! -w "$CONSOLE" ]; then
+  CONSOLE=/dev/console
+fi
+exec >"$CONSOLE" 2>&1
+
+printf '\033[H\033[2J\033[1;91m'
+/usr/bin/figlet -f small 'RK3318' 2>/dev/null || printf 'RK3318\n'
+printf '\033[1;93m'
+/usr/bin/figlet -f small 'ArmLab WiFi' 2>/dev/null || printf 'ArmLab WiFi\n'
+printf '\033[1;97m'
+printf '  Auditoria WiFi  |  %s  |  ' "$(hostname)"
+printf '\033[1;93m13 dBm\033[1;97m\n'
+printf '  sudo lab  ->  menu de herramientas\n'
+printf '\033[1;92m'
+SIG=$(/usr/bin/figlet -f small 'by DieGGaje' 2>/dev/null | sed -n '1,4p')
+[ -n "$SIG" ] || SIG='by DieGGaje'
+ANA=('  ,---,' ' /  A  \' ' \     /' "  '---'")
+mapfile -t SL <<< "$SIG"
+for ((i=0; i<${#SL[@]}; i++)); do
+  printf '\033[1;92m%s\033[1;91m   %s\n' "${SL[i]}" "${ANA[i]:-}"
+done
+printf '\033[0m\n'
+printf '\n\033[?25l'
+sleep 6
+printf '\033[?25h'
+exit 0

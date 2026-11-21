@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=LAB WiFi
+GenericName=Auditoria WiFi
+Comment=Menu de auditoria WiFi del RK3318 (60 columnas)
+Exec=/usr/local/bin/lab-desktop
+Icon=applications-system
+Terminal=false
+StartupNotify=true
+Categories=System;Network;
+Keywords=wifi;audit;lab;airgeddon;

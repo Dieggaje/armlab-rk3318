@@ -1,0 +1,6 @@
+#!/bin/sh
+# Terminal visible para Generar Diccionario
+sudo /usr/local/bin/generar-diccionario
+printf '\n'
+printf 'Pulsa Enter para cerrar esta ventana...\n'
+read -r _dummy

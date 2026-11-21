@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lanzador de escritorio para Chequeo de salud
+exec /usr/bin/xfce4-terminal \
+  --title="CHEQUEO DE SALUD - RK3318" \
+  --geometry=100x30 \
+  --command=/usr/local/bin/chequeo-box-terminal

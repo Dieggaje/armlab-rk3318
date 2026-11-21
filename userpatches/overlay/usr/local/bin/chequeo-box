@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# chequeo-box.sh - verificacion de salud del box (solo lectura)
+linea() { printf -- '------------------------------------------------------------\n'; }
+ok()   { printf '  [OK]   %s\n' "$1"; }
+warn() { printf '  [WARN] %s\n' "$1"; }
+
+linea
+printf 'CHEQUEO DE SALUD - RK3318\n'
+linea
+printf 'Fecha: %s\n' "$(date)"
+printf 'Kernel: %s\n' "$(uname -r)"
+linea
+
+printf 'INTERFACES\n'
+if [ -d /sys/class/net/wlx40 ]; then
+  ok "wlx40 existe  MAC $(cat /sys/class/net/wlx40/address 2>/dev/null)"
+  tipo=$(iw dev wlx40 info 2>/dev/null | awk '/type /{print $2}')
+  tx=$(iw dev wlx40 info 2>/dev/null | awk '/txpower /{print $2" "$3}')
+  [ "$tipo" = "managed" ] && ok "wlx40 modo $tipo" || warn "wlx40 modo $tipo"
+  case "$tx" in
+    13.00*) ok "wlx40 TX power $tx" ;;
+    "") warn "wlx40 TX power no disponible" ;;
+    *) warn "wlx40 TX power $tx" ;;
+  esac
+else
+  warn "wlx40 NO existe (adaptador desconectado o driver caido)"
+fi
+
+if [ -d /sys/class/net/wlan0 ]; then
+  ip=$(ip -4 -o addr show dev wlan0 2>/dev/null | awk '{print $4}')
+  est=$(ip -br link show dev wlan0 2>/dev/null | awk '{print $2}')
+  ssid=$(iw dev wlan0 info 2>/dev/null | awk '/ssid /{print $2}')
+  [ "$est" = "UP" ] && ok "wlan0 UP  IP ${ip:-sin IP}  SSID ${ssid:-?}" \
+                     || warn "wlan0 $est"
+else
+  warn "wlan0 NO existe"
+fi
+
+if [ -d /sys/class/net/eth0 ]; then
+  est=$(ip -br link show dev eth0 2>/dev/null | awk '{print $2}')
+  printf '  [INFO] eth0 %s (se mantiene sin tocar)\n' "$est"
+fi
+linea
+
+printf 'DRIVER 8814AU\n'
+if [ -d /sys/module/8814au/parameters ]; then
+  for p in rtw_tx_pwr_lmt_enable rtw_tx_nss rtw_rx_nss rtw_ips_mode rtw_lps_level rtw_power_mgnt; do
+    [ -r "/sys/module/8814au/parameters/$p" ] && \
+      printf '  %-24s = %s\n' "$p" "$(cat "/sys/module/8814au/parameters/$p" 2>/dev/null)"
+  done
+else
+  warn "parametros del modulo no disponibles"
+fi
+linea
+
+printf 'SERVICIOS\n'
+fallidos=$(systemctl --failed --no-legend 2>/dev/null | grep -c .)
+[ "${fallidos:-0}" -eq 0 ] && ok "0 servicios fallidos" || warn "$fallidos servicios fallidos"
+if systemctl is-active 8814au-txpower.service >/dev/null 2>&1; then
+  ok "8814au-txpower.service activo"
+elif [ "$(systemctl show 8814au-txpower.service -p ExecMainStatus --value 2>/dev/null)" = "0" ] \
+     && systemctl is-enabled 8814au-txpower.service 2>/dev/null | grep -q enabled; then
+  printf '  [INFO] 8814au-txpower.service oneshot completado y habilitado (TX power real verificado arriba)\n'
+else
+  warn "8814au-txpower.service con problemas"
+fi
+linea
+
+printf 'ERRORES RECIENTES DEL KERNEL (ultimas 24h)\n'
+errores=$(journalctl -k --since "24 hours ago" --no-pager 2>/dev/null \
+  | grep -E 'FORTIFY|rtw_txpwr|BUG:|usb .*reset|reset high-speed' | tail -5)
+if [ -n "$errores" ]; then
+  printf '%s\n' "$errores" | sed 's/^/  /'
+else
+  ok "sin FORTIFY / rtw_txpwr / resets USB recientes"
+fi
+linea
+
+printf 'ESPACIO Y HERRAMIENTAS\n'
+printf '  capturas : %s\n' "$(du -sh /root/capturas_wifi 2>/dev/null | awk '{print $1}')"
+printf '  wordlists: %s\n' "$(du -sh /var/lib/armlab/wordlists 2>/dev/null | awk '{print $1}')"
+for h in airodump-ng aireplay-ng aircrack-ng generar-diccionario capturar-crack; do
+  command -v "$h" >/dev/null 2>&1 && ok "$h disponible" || warn "$h no encontrado"
+done
+linea
+exit 0

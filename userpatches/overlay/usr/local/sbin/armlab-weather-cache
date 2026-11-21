@@ -1,0 +1,9 @@
+#!/bin/sh
+# ArmLab WiFi: una sola llamada a wttr.in, cache atomica para ambos widgets.
+LOC="${WEATHER_LOC:-Galicia, España}"
+Q=$(printf '%s' "$LOC" | sed -e 's/ /%20/g' -e 's/,/%2C/g')
+URL="https://wttr.in/${Q}?format=%C%7C%t%7C%l&lang=es"
+OUT=$(curl -s --max-time 8 "$URL" 2>/dev/null)
+[ -n "$OUT" ] || OUT="sin datos||sin datos"
+printf '%s' "$OUT" > /tmp/armlab-weather.cache.tmp
+mv -f /tmp/armlab-weather.cache.tmp /tmp/armlab-weather.cache

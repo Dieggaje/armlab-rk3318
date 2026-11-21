@@ -1,0 +1,6 @@
+#!/bin/sh
+# Terminal visible para Capturar + Crack WiFi
+sudo /usr/local/bin/capturar-crack
+printf '\n'
+printf 'Pulsa Enter para cerrar esta ventana...\n'
+read -r _dummy

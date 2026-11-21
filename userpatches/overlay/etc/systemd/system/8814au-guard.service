@@ -1,0 +1,11 @@
+[Unit]
+Description=Restaurar modulo rtl8814au si el .ko quedo vacio
+After=local-fs.target
+ConditionPathExists=/root/wifi-driver/8814au.ko.good
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/8814au-guard.sh
+
+[Install]
+WantedBy=multi-user.target

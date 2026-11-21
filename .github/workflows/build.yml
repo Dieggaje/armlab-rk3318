@@ -1,0 +1,46 @@
+name: ArmLab WiFi · RK3318
+
+# Compilación manual: pestaña Actions -> Run workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Descargar este repositorio
+        uses: actions/checkout@v4
+
+      - name: Asegurar permisos de ejecución
+        run: chmod +x userpatches/customize-image.sh
+
+      - name: Compilar imagen Armbian
+        uses: armbian/build@main
+        with:
+          armbian_token: ${{ secrets.GITHUB_TOKEN }}
+          armbian_target: build
+          armbian_board: rk3318-box
+          armbian_release: trixie
+          armbian_ui: xfce
+          armbian_kernel_branch: current
+          armbian_config_name: config-armlab
+          armbian_compress: sha,img,xz
+          armbian_runner_clean: "yes"
+          armbian_release_tag: armlab-rk3318-v1
+          armbian_release_title: "ArmLab WiFi · RK3318"
+          armbian_release_body: |
+            Imagen ArmLab WiFi para RK3318 TV Box.
+
+            Incluye escritorio XFCE en español, logo de arranque, widget Conky,
+            menu `sudo lab` y el pack completo de auditoria WiFi.
+
+            NO incluye contrasenas, IP fija, claves SSH ni historial.
+            El primer arranque pregunta usuario y contrasenas.
+
+            Requiere dongle USB RTL8814AU (0bda:8813) para el modo monitor.
+            Probar primero desde microSD antes de grabar en eMMC.

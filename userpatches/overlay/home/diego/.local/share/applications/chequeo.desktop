@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Chequeo de salud
+GenericName=Diagnostico del box
+Comment=Verifica wlx40, wlan0, eth0, driver, servicios y errores del kernel (solo lectura)
+Exec=/usr/local/bin/chequeo-box-desktop
+Icon=utilities-system-monitor
+Terminal=false
+StartupNotify=true
+Categories=System;
+Keywords=wifi;salud;diagnostico;driver;servicios;

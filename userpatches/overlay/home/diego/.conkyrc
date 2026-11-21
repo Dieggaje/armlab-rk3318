@@ -1,0 +1,55 @@
+conky.config = {
+  alignment = 'top_right',
+  background = false,
+  border_width = 1,
+  cpu_avg_samples = 2,
+  default_color = 'ffffff',
+  default_outline_color = '000000',
+  default_shade_color = '000000',
+  double_buffer = true,
+  draw_borders = false,
+  draw_graph_borders = false,
+  draw_outline = false,
+  draw_shades = false,
+  font = 'DejaVu Sans Mono:bold:size=11',
+  gap_x = 14,
+  gap_y = 44,
+  minimum_height = 5,
+  minimum_width = 5,
+  net_avg_samples = 2,
+  no_buffers = true,
+  out_to_console = false,
+  out_to_stderr = false,
+  out_to_x = true,
+  own_window = true,
+  own_window_class = 'Conky',
+  own_window_type = 'normal',
+  own_window_hints = 'undecorated,below,sticky,skip_taskbar,skip_pager',
+  own_window_transparent = true,
+  own_window_argb_visual = true,
+  own_window_argb_value = 0,
+  show_graph_range = false,
+  show_graph_scale = false,
+  stippled_borders = 0,
+  update_interval = 3.0,
+  uppercase = false,
+  use_spacer = 'none',
+  use_xft = true,
+  xftalpha = 1.0,
+}
+
+conky.text = [[
+${color #ffd43b}${font DejaVu Sans Mono:bold:size=15} RK3318 ${font DejaVu Sans Mono:bold:size=12}${color #ffd43b}· ArmLab WiFi ${font DejaVu Sans Mono:bold:size=11}${color}
+${color #868e96}${hr 1}${color}
+${color #ffffff}TEMP    ${color #a9e34b}${execi 5 awk '{printf "%.1f", $1/1000}' /sys/class/thermal/thermal_zone0/temp} C
+${color #ffffff}CPU     ${color #a9e34b}${cpu cpu0}% ${color #ffc078}${cpubar 4,70}
+${color #ffffff}RAM     ${color #a9e34b}${mem} / ${memmax} ${color #868e96}(${memperc}%)
+${color #ffffff}DISCO   ${color #a9e34b}${fs_used_perc /}% ${color #868e96}${fs_free /} libres
+${color #ffffff}CARGA   ${color #a9e34b}${loadavg}
+${color #ffffff}ENCENDIDO ${color #a9e34b}${uptime}
+${color #868e96}${hr 1}${color}
+${color #ffffff}HORA    ${color #a9e34b}${time %H:%M:%S}
+${color #ffffff}FECHA   ${color #a9e34b}${time %d/%m/%Y}
+${color #ffffff}TIEMPO  ${color #a9e34b}${execi 600 /usr/local/sbin/armlab-weather}
+${color #ffffff}LUGAR   ${color #a9e34b}${execi 600 /usr/local/sbin/armlab-location}
+]]

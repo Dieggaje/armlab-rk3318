@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Airgeddon WiFi
+GenericName=Auditoria WiFi avanzada
+Comment=Suite airgeddon para auditoria WiFi del RK3318
+Exec=/usr/local/bin/airgeddon-desktop
+Icon=aircrack-ng
+Terminal=false
+StartupNotify=true
+Categories=System;Network;
+Keywords=wifi;audit;airgeddon;wifite;

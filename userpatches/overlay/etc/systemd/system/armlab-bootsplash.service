@@ -1,0 +1,14 @@
+[Unit]
+Description=ArmLab WiFi bootsplash (logo antes del escritorio)
+Before=lightdm.service
+After=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/armlab-bootsplash
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

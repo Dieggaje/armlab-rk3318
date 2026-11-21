@@ -1,0 +1,612 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+"""wifi-audit - suite de auditoria WiFi para el RK3318 con Armbian.
+
+Uso: sudo wifi-audit <comando> [opciones]
+Solo para redes propias o con autorizacion explicita.
+"""
+import argparse
+import csv
+import datetime
+import html
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+BASE = HOME / "audit"
+RUNS = BASE / "runs"
+REPORTS = BASE / "reports"
+WORDLISTS = BASE / "wordlists"
+AUTH_FILE = BASE / "authorized.txt"
+MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
+
+TOOL_PATHS = {
+    "airodump-ng": "/usr/sbin/airodump-ng",
+    "aireplay-ng": "/usr/sbin/aireplay-ng",
+    "hcxdumptool": "/usr/bin/hcxdumptool",
+    "hcxpcapngtool": "/usr/bin/hcxpcapngtool",
+    "hashcat": "/usr/bin/hashcat",
+    "bettercap": "/usr/bin/bettercap",
+    "nmap": "/usr/bin/nmap",
+    "tshark": "/usr/bin/tshark",
+    "crunch": "/usr/bin/crunch",
+}
+
+
+# ---------------------------------------------------------------- utilidades
+def run(cmd, timeout=None, capture=True, quiet=False):
+    """Ejecuta una lista de argumentos. Devuelve CompletedProcess."""
+    if not quiet:
+        print("  $ " + " ".join(str(c) for c in cmd))
+    return subprocess.run(
+        [str(c) for c in cmd],
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.STDOUT if capture else None,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+def tool(name):
+    p = TOOL_PATHS.get(name) or shutil.which(name)
+    return p if p and Path(p).exists() else None
+
+
+def iface():
+    r = run(["/usr/local/bin/audit-iface"], quiet=True)
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def require_root():
+    if os.geteuid() != 0:
+        print("Esta accion necesita root: usa  sudo wifi-audit ...")
+        sys.exit(1)
+
+
+def require_iface():
+    i = iface()
+    if not i:
+        print("No se encuentra el adaptador RTL8814AU (lsusb / modprobe 8814au)")
+        sys.exit(1)
+    return i
+
+
+def fix_owner(path):
+    user = os.environ.get("SUDO_USER")
+    if not user or user == "root":
+        return
+    subprocess.run(["chown", "-R", f"{user}:{user}", str(path)],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def new_run(tag=""):
+    RUNS.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    name = stamp + ("-" + tag if tag else "")
+    p = RUNS / name
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def monitor_on(channel):
+    require_iface()
+    r = run(["/usr/local/bin/audit-monitor-on", str(channel)])
+    if r.returncode != 0:
+        print("No se pudo activar monitor:", r.stdout)
+        sys.exit(1)
+    return r
+
+
+def monitor_off():
+    r = run(["/usr/local/bin/audit-monitor-off"], quiet=True)
+    return r
+
+
+def authorized(target=None):
+    lines = []
+    if AUTH_FILE.exists():
+        lines = [x.strip() for x in AUTH_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+                 if x.strip() and not x.strip().startswith("#")]
+    ok = True
+    if not lines:
+        ok = False
+    if target and ok:
+        ok = any(target.upper() == x.upper() for x in lines)
+    if ok:
+        return True
+    print("\n  ! Verificacion de autorizacion")
+    print(f"  Objetivo: {target or 'cualquier red del canal'}")
+    print("  Este box puede inyectar trafico. Usalo SOLO en redes tuyas o autorizadas.")
+    if not sys.stdin.isatty():
+        print("  Anade la red a", AUTH_FILE, "para automatizar. Abortando.")
+        sys.exit(1)
+    ans = input("  Escribe SI para confirmar que tienes autorizacion: ").strip().upper()
+    if ans not in ("SI", "S", "YES", "Y"):
+        print("  Abortado.")
+        sys.exit(1)
+    return True
+
+
+def parse_airodump_csv(path):
+    """Devuelve (aps, clients) a partir de un CSV de airodump-ng."""
+    sections, cur = [], []
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            if not line.strip():
+                if cur:
+                    sections.append(cur)
+                    cur = []
+            else:
+                cur.append(line)
+    if cur:
+        sections.append(cur)
+    aps, clients = [], []
+    for sec in sections:
+        for row in csv.reader(sec):
+            if not row:
+                continue
+            r = [c.strip() for c in row]
+            if not r or not MAC_RE.match(r[0]):
+                continue
+            if len(r) >= 14:
+                aps.append({"bssid": r[0], "first": r[1], "last": r[2], "channel": r[3],
+                            "privacy": r[5], "power": r[8], "beacons": r[9],
+                            "essid": r[13]})
+            elif len(r) >= 6 and MAC_RE.match(r[1]):
+                clients.append({"bssid": r[0], "station": r[1], "power": r[2],
+                                "frames": r[5] if len(r) > 5 else ""})
+    return aps, clients
+
+
+def print_table(headers, rows):
+    if not rows:
+        print("  (sin datos)")
+        return
+    widths = [max(len(str(h)), *(len(str(r[i])) for r in rows)) for i, h in enumerate(headers)]
+    line = "  " + "  ".join(str(h).ljust(w) for h, w in zip(headers, widths))
+    print(line)
+    print("  " + "  ".join("-" * w for w in widths))
+    for r in rows:
+        print("  " + "  ".join(str(v).ljust(w) for v, w in zip(r, widths)))
+
+
+def line_count(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return sum(1 for _ in fh)
+    except OSError:
+        return 0
+
+
+# ---------------------------------------------------------------- comandos
+def cmd_status(args):
+    print("=" * 66)
+    print(" wifi-audit  -  RK3318 / Armbian")
+    print("=" * 66)
+    print(f"  Kernel      : {platform.release()}")
+    print(f"  Workspace   : {BASE}")
+    i = iface()
+    print(f"  Adaptador   : {i or 'NO DETECTADO'}")
+    if i:
+        info = run(["/usr/sbin/iw", "dev", i, "info"], quiet=True).stdout
+        for ln in info.splitlines():
+            if any(k in ln.lower() for k in ("type", "channel", "txpower")):
+                print("    " + ln.strip())
+        drv = Path(f"/sys/class/net/{i}/device/driver")
+        if drv.exists():
+            print("    driver     : " + drv.resolve().name)
+    wlan = run(["/usr/bin/ip", "-4", "-o", "addr", "show", "wlan0"], quiet=True).stdout.strip()
+    print("  wlan0       : " + (wlan.split()[3] if wlan else "sin IP") + "  (servidor, intacto)")
+    print("  Herramientas:")
+    for name, path in TOOL_PATHS.items():
+        print(f"    {name:<16} {'OK' if path else 'FALTA'}")
+    dk = run(["/usr/sbin/dkms", "status"], quiet=True).stdout.strip()
+    print("  DKMS        : " + (dk.replace("\n", " | ") if dk else "sin modulos"))
+    if os.geteuid() == 0:
+        d = run(["/usr/bin/docker", "ps", "--format", "{{.Names}} {{.Status}}"], quiet=True).stdout.strip()
+        print("  Docker      : " + (d.replace("\n", " | ") if d else "sin contenedores"))
+    auth = []
+    if AUTH_FILE.exists():
+        auth = [x.strip() for x in AUTH_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+                if x.strip() and not x.strip().startswith("#")]
+    print(f"  Autorizadas : {len(auth)} entradas en authorized.txt")
+    print(f"  Sesiones    : {len(list(RUNS.glob('*')))} en {RUNS}")
+    print("=" * 66)
+
+
+def cmd_scan(args):
+    require_root()
+    i = require_iface()
+    monitor_on(args.channel or 1)
+    p = new_run("scan")
+    prefix = p / "scan"
+    print(f"\n  Escaneando {args.seconds}s en {i} ...")
+    cmd = ["timeout", "-s", "INT", f"{args.seconds}s", "/usr/sbin/airodump-ng",
+           "--write", str(prefix), "--output-format", "csv"]
+    if args.channel:
+        cmd += ["-c", str(args.channel)]
+    cmd.append(i)
+    r = run(cmd, timeout=args.seconds + 15, quiet=True)
+    csvs = list(p.glob("scan-*.csv"))
+    if not csvs:
+        print("  No se genero CSV. Revisa el adaptador/canal.")
+        sys.exit(1)
+    aps, clients = parse_airodump_csv(csvs[0])
+    data = {"when": datetime.datetime.now().isoformat(timespec="seconds"),
+            "channel": args.channel, "iface": i,
+            "aps": aps, "clients": clients, "csv": str(csvs[0])}
+    (p / "scan.json").write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    print(f"\n  APs encontrados: {len(aps)}   Clientes: {len(clients)}")
+    print_table(["BSSID", "CH", "PWR", "ENC", "SSID"],
+                [(a["bssid"], a["channel"], a["power"], a["privacy"], a["essid"][:28]) for a in aps[:25]])
+    if clients:
+        print("\n  Clientes:")
+        print_table(["BSSID", "STATION", "PWR", "FRAMES"],
+                    [(c["bssid"], c["station"], c["power"], c["frames"]) for c in clients[:15]])
+    if not args.keep_monitor:
+        monitor_off()
+    fix_owner(p)
+    print(f"\n  Sesion guardada en: {p}")
+    return p
+
+
+def cmd_capture(args):
+    require_root()
+    target = args.bssid.upper() if args.bssid else None
+    authorized(target)
+    i = require_iface()
+    # hcxdumptool configura el monitor por si mismo; lo dejamos en managed antes.
+    run(["/usr/local/bin/audit-monitor-off"], quiet=True)
+    p = new_run("capture")
+    cap = p / "capture.pcapng"
+    if args.channel:
+        band = "a" if args.channel <= 14 else "b"
+        chan = ["-c", f"{args.channel}{band}"]
+    else:
+        chan = ["-F"]
+    print(f"\n  Capturando {args.seconds}s ({'canal ' + str(args.channel) if args.channel else 'todos los canales'}) ... solo red autorizada")
+    cmd = ["timeout", "-s", "INT", f"{args.seconds}s", "/usr/bin/hcxdumptool",
+           "-i", i, "-w", str(cap)] + chan + ["--rds=1"]
+    if args.passive:
+        cmd += ["--disable_deauthentication", "--disable_proberequest",
+                "--disable_association", "--disable_reassociation", "--attemptapmax=0"]
+    r = run(cmd, timeout=args.seconds + 25)
+    (p / "hcxdumptool.log").write_text(r.stdout or "", encoding="utf-8")
+    print("\n  Convirtiendo a hc22000 ...")
+    conv = run(["/usr/bin/hcxpcapngtool", "-o", str(p / "hashes.hc22000"), str(cap)])
+    (p / "conversion.txt").write_text(conv.stdout or "", encoding="utf-8")
+    ess = run(["/usr/bin/tshark", "-r", str(cap), "-Y", "wlan.fc.type_subtype == 0x08",
+               "-T", "fields", "-e", "wlan.sa", "-e", "wlan.ssid"], quiet=True).stdout
+    ess_lines = []
+    for ln in ess.splitlines():
+        parts = ln.strip().split()
+        if parts and MAC_RE.match(parts[0]):
+            ess_lines.append(ln.strip())
+    (p / "essids.txt").write_text("\n".join(sorted(set(ess_lines))), encoding="utf-8")
+    if not args.keep_monitor:
+        monitor_off()
+    hashes = line_count(p / "hashes.hc22000")
+    print("\n  Resumen:")
+    print(f"    pcapng     : {cap} ({cap.stat().st_size if cap.exists() else 0} bytes)")
+    print(f"    hashes     : {hashes} en {p / 'hashes.hc22000'}")
+    print(f"    ESSID vistos: {line_count(p / 'essids.txt')}")
+    print(f"    conversion : {p / 'conversion.txt'}")
+    fix_owner(p)
+    print(f"\n  Sesion guardada en: {p}")
+    return p
+
+
+def cmd_analyze(args):
+    cap = Path(args.pcapng).expanduser().resolve()
+    if not cap.exists():
+        print("No existe:", cap)
+        sys.exit(1)
+    out = cap.with_suffix(".hc22000")
+    print("  Convirtiendo", cap.name, "...")
+    r = run(["/usr/bin/hcxpcapngtool", "-o", str(out), str(cap)])
+    print(r.stdout or "")
+    ess = run(["/usr/bin/tshark", "-r", str(cap), "-Y", "wlan.fc.type_subtype == 0x08",
+               "-T", "fields", "-e", "wlan.sa", "-e", "wlan.ssid"], quiet=True).stdout
+    up = sorted(set(x.strip() for x in ess.splitlines()
+                    if x.strip() and MAC_RE.match(x.strip().split()[0])))
+    print(f"\n  APs vistos en la captura: {len(up)}")
+    for ln in up[:25]:
+        print("    " + ln)
+    print(f"\n  Hashes: {line_count(out)} -> {out}")
+
+
+def cmd_crack(args):
+    hf = Path(args.hashfile).expanduser().resolve()
+    if not hf.exists():
+        print("No existe:", hf)
+        sys.exit(1)
+    if args.wordlist:
+        wl = Path(args.wordlist).expanduser().resolve()
+    else:
+        candidates = sorted(WORDLISTS.glob("*.txt")) + [Path("/usr/share/wordlists/rockyou.txt")]
+        wl = next((c for c in candidates if c.exists()), BASE / "wordlists" / "basic.txt")
+    if not wl.exists():
+        print("No hay wordlist. Genera una con: wifi-audit wordlist digits6")
+        sys.exit(1)
+    print(f"  Wordlist: {wl}")
+    out = Path(str(hf) + ".cracked")
+    cmd = ["/usr/bin/hashcat", "-m", "22000", "--potfile-disable", "--outfile", str(out), str(hf), str(wl)]
+    if args.rules:
+        cmd.append("/usr/share/hashcat/rules/best64.rule")
+    print("  Lanzando hashcat (esto puede tardar) ...")
+    r = run(cmd, timeout=args.seconds if args.seconds else None, capture=False)
+    print("\n  Resultados:")
+    show = run(["/usr/bin/hashcat", "-m", "22000", "--show", str(hf)], quiet=True)
+    lines = [x for x in (show.stdout or "").splitlines() if x.strip()]
+    print("\n".join(lines[:30]) if lines else "  (sin claves encontradas)")
+    Path(str(hf) + ".result.txt").write_text("\n".join(lines), encoding="utf-8")
+    fix_owner(out.parent)
+    print(f"\n  Guardado en: {hf}.result.txt")
+
+
+def cmd_wordlist(args):
+    WORDLISTS.mkdir(parents=True, exist_ok=True)
+    extra = list(args.extra)
+    name_opt = args.name
+    if "--name" in extra:  # por si argparse lo deja dentro del REMAINDER
+        idx = extra.index("--name")
+        if idx + 1 < len(extra):
+            name_opt = extra[idx + 1]
+            del extra[idx:idx + 2]
+    name = (name_opt or args.preset).replace("/", "_")
+    out = WORDLISTS / f"{name}.txt"
+    presets = {
+        "digits4": ["4", "4", "0123456789"],
+        "digits6": ["6", "6", "0123456789"],
+        "digits8": ["8", "8", "0123456789"],
+        "alnum6": ["6", "6", "abcdefghijklmnopqrstuvwxyz0123456789"],
+        "alnum8": ["8", "8", "abcdefghijklmnopqrstuvwxyz0123456789"],
+    }
+    if args.preset in presets:
+        cmd = ["/usr/bin/crunch"] + presets[args.preset] + ["-o", str(out)]
+    else:
+        if not args.extra:
+            print("Especifica un preset o parametros de crunch tras '--'")
+            sys.exit(1)
+        cmd = ["/usr/bin/crunch"] + extra + ["-o", str(out)]
+    print("  Generando wordlist (crunch) ...")
+    r = run(cmd, timeout=args.seconds if args.seconds else None, quiet=True)
+    if not out.exists():
+        print(" crunch no genero el archivo:", r.stdout)
+        sys.exit(1)
+    print(f"  Wordlist: {out}  ({line_count(out)} lineas, {out.stat().st_size} bytes)")
+    fix_owner(out)
+
+
+def cmd_report(args):
+    rundir = Path(args.run).expanduser().resolve() if args.run else None
+    if rundir is None:
+        dirs = sorted([d for d in RUNS.iterdir() if d.is_dir()], key=lambda d: d.name)
+        if not dirs:
+            print("No hay sesiones. Ejecuta primero: wifi-audit scan")
+            sys.exit(1)
+        rundir = dirs[-1]
+    if not rundir.is_dir():
+        print("No existe la sesion:", rundir)
+        sys.exit(1)
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    scan = {}
+    sp = rundir / "scan.json"
+    if sp.exists():
+        scan = json.loads(sp.read_text(encoding="utf-8"))
+    aps = scan.get("aps", [])
+    clients = scan.get("clients", [])
+    conv = (rundir / "conversion.txt").read_text(encoding="utf-8") if (rundir / "conversion.txt").exists() else ""
+    essids = (rundir / "essids.txt").read_text(encoding="utf-8") if (rundir / "essids.txt").exists() else ""
+    cracked = ""
+    for f in rundir.glob("*.result.txt"):
+        cracked += f.read_text(encoding="utf-8")
+    hashes = line_count(rundir / "hashes.hc22000")
+
+    md = [f"# Informe de auditoria - {rundir.name}", "",
+          f"Generado: {datetime.datetime.now().isoformat(timespec='seconds')}", "",
+          "Solo redes propias o autorizadas.", "",
+          "## Resumen", "",
+          f"- APs detectados: {len(aps)}",
+          f"- Clientes detectados: {len(clients)}",
+          f"- Hashes hc22000: {hashes}",
+          f"- Claves recuperadas: {len([x for x in cracked.splitlines() if x.strip()])}", "",
+          "## Accesos puntos", "",
+          "| BSSID | Canal | PWR | Cifrado | SSID |", "|---|---|---|---|---|"]
+    for a in aps[:40]:
+        md.append("| {} | {} | {} | {} | {} |".format(
+            a.get("bssid", ""), a.get("channel", ""), a.get("power", ""),
+            a.get("privacy", ""), str(a.get("essid", "")).replace("|", "/")))
+    md += ["", "## ESSID en capturas", "", "```", essids[:3000], "```", "",
+           "## Conversion", "", "```", conv[:3000], "```", "",
+           "## Claves recuperadas", "", "```", cracked[:3000], "```", ""]
+    mdpath = REPORTS / f"{rundir.name}.md"
+    mdpath.write_text("\n".join(md), encoding="utf-8")
+
+    def tbl(headers, rows):
+        h = "".join(f"<th>{html.escape(str(x))}</th>" for x in headers)
+        body = "".join("<tr>" + "".join(f"<td>{html.escape(str(c))}</td>" for c in r) + "</tr>" for r in rows)
+        return f"<table><thead><tr>{h}</tr></thead><tbody>{body}</tbody></table>"
+
+    aprows = [(a.get("bssid", ""), a.get("channel", ""), a.get("power", ""),
+               a.get("privacy", ""), a.get("essid", "")) for a in aps[:40]]
+    doc = f"""<!doctype html><html lang="es"><head><meta charset="utf-8">
+<title>{html.escape(rundir.name)}</title><style>
+body{{font:14px system-ui,sans-serif;max-width:1000px;margin:2em auto;color:#222}}
+table{{border-collapse:collapse;width:100%;margin:1em 0}}th,td{{border:1px solid #ccc;padding:5px 8px;text-align:left}}
+th{{background:#eee}}pre{{background:#f6f6f6;padding:10px;overflow:auto}}h1{{color:#1a4d80}}
+</style></head><body><h1>Informe WiFi - {html.escape(rundir.name)}</h1>
+<p>Generado: {html.escape(datetime.datetime.now().isoformat(timespec='seconds'))}</p>
+<h2>Resumen</h2><ul><li>APs: {len(aps)}</li><li>Clientes: {len(clients)}</li>
+<li>Hashes: {hashes}</li></ul><h2>Accesos puntos</h2>
+{tbl(['BSSID','Canal','PWR','Cifrado','SSID'], aprows)}
+<h2>ESSID</h2><pre>{html.escape(essids[:3000])}</pre>
+<h2>Conversion</h2><pre>{html.escape(conv[:3000])}</pre>
+<h2>Claves</h2><pre>{html.escape(cracked[:3000])}</pre></body></html>"""
+    htmlpath = REPORTS / f"{rundir.name}.html"
+    htmlpath.write_text(doc, encoding="utf-8")
+    fix_owner(REPORTS)
+    print(f"  Informe MD  : {mdpath}")
+    print(f"  Informe HTML: {htmlpath}")
+
+
+def cmd_serve(args):
+    print(f"  Sirviendo informes en http://0.0.0.0:{args.port}/  (Ctrl+C para parar)")
+    try:
+        subprocess.run(["/usr/bin/python3", "-m", "http.server", str(args.port),
+                        "--bind", "0.0.0.0", "--directory", str(REPORTS)], check=False)
+    except KeyboardInterrupt:
+        print("\n  Servidor detenido.")
+
+
+def ask(prompt, default=""):
+    r = subprocess.run(["/usr/bin/whiptail", "--title", "wifi-audit", "--inputbox",
+                        prompt, "10", "60", default], capture_output=True, text=True)
+    return r.stderr.strip() if r.returncode == 0 else None
+
+
+def cmd_menu(args):
+    if os.geteuid() != 0:
+        os.execvp("sudo", ["sudo", "/usr/local/bin/wifi-audit", "menu"])
+    while True:
+        title = "wifi-audit  |  RK3318  |  SOLO REDES AUTORIZADAS"
+        items = [
+            ("1", "Estado del box"), ("2", "Escanear redes (airodump)"),
+            ("3", "Capturar PMKID/handshake (hcxdumptool)"), ("4", "Analizar captura"),
+            ("5", "Crackear con hashcat"), ("6", "Generar wordlist"),
+            ("7", "Generar informe"), ("8", "Ver informes por HTTP"), ("9", "Salir"),
+        ]
+        flat = []
+        for k, v in items:
+            flat += [k, v]
+        r = subprocess.run(["/usr/bin/whiptail", "--title", title, "--menu",
+                            "Selecciona una opcion", "20", "62", "9"] + flat,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            break
+        sel = r.stderr.strip()
+        cmd = ["/usr/local/bin/wifi-audit"]
+        if sel == "1":
+            cmd.append("status")
+        elif sel == "2":
+            sec = ask("Segundos de escaneo", "20")
+            if sec is None:
+                continue
+            ch = ask("Canal (vacio = saltar canales)", "")
+            if ch is None:
+                continue
+            cmd += ["scan", "--seconds", sec]
+            if ch:
+                cmd += ["--channel", ch]
+        elif sel == "3":
+            ch = ask("Canal", "11")
+            if ch is None:
+                continue
+            sec = ask("Segundos de captura", "60")
+            if sec is None:
+                continue
+            bssid = ask("BSSID objetivo (vacio = todos)", "")
+            if bssid is None:
+                continue
+            cmd += ["capture", "--channel", ch, "--seconds", sec]
+            if bssid:
+                cmd += ["--bssid", bssid]
+        elif sel == "4":
+            f = ask("Ruta del pcapng", str(BASE / "runs"))
+            if f is None:
+                continue
+            cmd += ["analyze", f]
+        elif sel == "5":
+            f = ask("Ruta del fichero hc22000", "")
+            if f is None:
+                continue
+            cmd += ["crack", f]
+        elif sel == "6":
+            p = ask("Preset: digits4/digits6/digits8/alnum6/alnum8", "digits6")
+            if p is None:
+                continue
+            cmd += ["wordlist", p]
+        elif sel == "7":
+            d = ask("Sesion (vacio = la mas reciente)", "")
+            if d is None:
+                continue
+            cmd += ["report"] + (["--run", d] if d else [])
+        elif sel == "8":
+            cmd += ["serve", "--port", "8080"]
+        else:
+            break
+        subprocess.call(cmd)
+        subprocess.run(["/usr/bin/whiptail", "--title", "wifi-audit", "--msgbox",
+                        "Pulsa Enter para continuar", "8", "45"], capture_output=True)
+    print("  Hasta luego.")
+
+
+# ---------------------------------------------------------------- argparse
+def main():
+    ap = argparse.ArgumentParser(prog="wifi-audit", description="Suite de auditoria WiFi (RK3318)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("status", help="estado del box y de las herramientas")
+    p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser("scan", help="escanear redes y clientes")
+    p.add_argument("--seconds", type=int, default=20)
+    p.add_argument("--channel", type=int)
+    p.add_argument("--keep-monitor", action="store_true", help="no volver a managed al terminar")
+    p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("capture", help="capturar PMKID/handshake con hcxdumptool")
+    p.add_argument("--channel", type=int, default=11, help="canal (0 = todos)")
+    p.add_argument("--seconds", type=int, default=60)
+    p.add_argument("--bssid", help="BSSID objetivo (debe estar autorizado)")
+    p.add_argument("--passive", action="store_true", help="sin deauth ni asociaciones (menos intrusivo)")
+    p.add_argument("--keep-monitor", action="store_true", help="no volver a managed al terminar")
+    p.set_defaults(func=cmd_capture)
+
+    p = sub.add_parser("analyze", help="convertir y resumir una captura")
+    p.add_argument("pcapng")
+    p.set_defaults(func=cmd_analyze)
+
+    p = sub.add_parser("crack", help="ataque de diccionario con hashcat")
+    p.add_argument("hashfile")
+    p.add_argument("--wordlist")
+    p.add_argument("--rules", action="store_true")
+    p.add_argument("--seconds", type=int, default=0, help="timeout en segundos (0 = sin limite)")
+    p.set_defaults(func=cmd_crack)
+
+    p = sub.add_parser("wordlist", help="generar wordlist con crunch")
+    p.add_argument("preset", nargs="?", default="digits6",
+                   help="digits4|digits6|digits8|alnum6|alnum8")
+    p.add_argument("--name")
+    p.add_argument("--seconds", type=int, default=0)
+    p.add_argument("extra", nargs=argparse.REMAINDER)
+    p.set_defaults(func=cmd_wordlist)
+
+    p = sub.add_parser("report", help="generar informe MD/HTML de una sesion")
+    p.add_argument("--run")
+    p.set_defaults(func=cmd_report)
+
+    p = sub.add_parser("serve", help="servir informes por HTTP")
+    p.add_argument("--port", type=int, default=8080)
+    p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("menu", help="menu interactivo (whiptail)")
+    p.set_defaults(func=cmd_menu)
+
+    args = ap.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n  Interrumpido.")
+        sys.exit(130)

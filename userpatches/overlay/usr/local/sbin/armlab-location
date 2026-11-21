@@ -1,0 +1,3 @@
+#!/bin/sh
+# ArmLab WiFi: localidad desde la cache compartida (sin segunda llamada).
+cut -d'|' -f3 /tmp/armlab-weather.cache 2>/dev/null || printf 'sin datos'

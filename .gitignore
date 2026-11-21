@@ -1,0 +1,21 @@
+# Salidas de compilacion
+*.img
+*.img.xz
+*.img.zst
+*.tar
+*.sha
+*.asc
+build/
+output/
+
+# Ruido local
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*~
+
+# No subir cambios locales al overlay con datos reales
+userpatches/overlay/root/
+userpatches/overlay/etc/netplan/
+userpatches/overlay/etc/ssh/

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lanzador de escritorio para LAB WiFi en el RK3318
+exec /usr/bin/xfce4-terminal \
+  --title="LAB WiFi - RK3318" \
+  --geometry=72x24 \
+  --command="sudo /usr/local/bin/lab"

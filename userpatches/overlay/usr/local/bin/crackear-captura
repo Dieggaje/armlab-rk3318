@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+# crackear-captura.sh - prueba un .cap guardado con cualquier wordlist
+# Interactivo: sudo crackear-captura
+# Directo:     sudo crackear-captura /ruta/handshake.cap /ruta/wordlist.txt
+
+set -u
+CAPDIR=/root/capturas_wifi
+WLDIR=/var/lib/armlab/wordlists
+CAP="${1:-}"
+WL="${2:-}"
+
+linea() { printf -- '------------------------------------------------------------\n'; }
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "Ejecuta con sudo: sudo crackear-captura"
+  exit 1
+fi
+
+linea
+printf 'CRACKEAR CAPTURA GUARDADA\n'
+linea
+
+# ---- Elegir captura ---------------------------------------------------------
+if [ -z "$CAP" ]; then
+  mapfile -t CAPS < <(find "$CAPDIR" -maxdepth 1 -type f -name '*.cap' -printf '%f\n' 2>/dev/null | sort -r)
+  if [ "${#CAPS[@]}" -eq 0 ]; then
+    echo "No hay capturas .cap en $CAPDIR"
+    exit 1
+  fi
+  printf 'Capturas disponibles en %s:\n\n' "$CAPDIR"
+  local_i=1
+  for f in "${CAPS[@]}"; do
+    printf '%2d) %-46s %8s bytes\n' "$local_i" "$f" \
+      "$(stat -c %s "$CAPDIR/$f" 2>/dev/null)"
+    local_i=$((local_i+1))
+  done
+  linea
+  printf 'Elige captura [1]: '
+  read -r op || op=""
+  [ -z "$op" ] && op=1
+  if [[ "$op" =~ ^[0-9]+$ ]] && [ "$op" -ge 1 ] && [ "$op" -le "${#CAPS[@]}" ]; then
+    CAP="$CAPDIR/${CAPS[$((op-1))]}"
+  else
+    echo "Seleccion no valida."
+    exit 1
+  fi
+fi
+
+if [ ! -r "$CAP" ]; then
+  echo "No existe o no se puede leer: $CAP"
+  exit 1
+fi
+
+csv="${CAP%.cap}.csv"
+printf 'Captura: %s\n' "$CAP"
+if [ -f "$csv" ]; then
+  info=$(awk -F, '
+    /^BSSID, First time seen/ { dentro=1; next }
+    dentro && $1 ~ /^[[:space:]]*[0-9A-Fa-f][0-9A-Fa-f]:/ {
+      b=$1; e=$14
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", b)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", e)
+      printf "%s  %s", b, (e=="" ? "(oculta)" : e); exit
+    }' "$csv")
+  printf 'Red    : %s\n' "$info"
+fi
+
+# ---- Elegir diccionario ----------------------------------------------------
+if [ -z "$WL" ]; then
+  WL_DEFAULT="$WLDIR/latest.txt"
+  [ -r "$WL_DEFAULT" ] || WL_DEFAULT="$WLDIR/basico.txt"
+  declare -A RUTAS=() NOMBRES=()
+  n=1
+  destino=$(readlink -f "$WL_DEFAULT" 2>/dev/null || printf '%s' "$WL_DEFAULT")
+  RUTAS[1]="$WL_DEFAULT"
+  NOMBRES[1]="latest -> $(basename "$destino")"
+  while IFS= read -r nombre; do
+    [ "$nombre" = "latest.txt" ] && continue
+    [ -r "$WLDIR/$nombre" ] || continue
+    n=$((n+1))
+    RUTAS[$n]="$WLDIR/$nombre"
+    NOMBRES[$n]="$nombre"
+  done < <(find "$WLDIR" -maxdepth 1 -type f -name '*.txt' -printf '%f\n' 2>/dev/null | sort)
+
+  linea
+  printf 'SELECCION DE DICCIONARIO\n'
+  linea
+  printf ' 1) %-42s %6s lineas  [DEFAULT]\n' "${NOMBRES[1]}" "$(wc -l < "${RUTAS[1]}")"
+  for ((i=2; i<=n; i++)); do
+    printf '%2d) %-42s %6s lineas\n' "$i" "${NOMBRES[$i]}" "$(wc -l < "${RUTAS[$i]}")"
+  done
+  printf ' 0) Escribir ruta personalizada\n'
+  linea
+  printf 'Enter = usar el actual | elige numero: '
+  op=""
+  read -r op || op=""
+  case "$op" in
+    "") WL="$WL_DEFAULT" ;;
+    0)
+      printf 'Ruta del diccionario: '
+      read -r op || op=""
+      if [ -n "$op" ] && [ -r "$op" ]; then WL="$op"; else WL="$WL_DEFAULT"; fi
+      ;;
+    *)
+      if [[ "$op" =~ ^[0-9]+$ ]] && [ -n "${RUTAS[$op]:-}" ]; then
+        WL="${RUTAS[$op]}"
+      else
+        WL="$WL_DEFAULT"
+      fi
+      ;;
+  esac
+fi
+
+if [ ! -r "$WL" ]; then
+  echo "No existe el diccionario: $WL"
+  exit 1
+fi
+
+linea
+printf 'Diccionario: %s (%s lineas)\n' "$WL" "$(wc -l < "$WL")"
+printf 'Probando claves ...\n'
+linea
+
+LOG="$CAP.crack-$(date +%Y%m%d-%H%M%S).log"
+aircrack-ng -w "$WL" "$CAP" 2>&1 | tee "$LOG"
+
+linea
+if grep -aq 'KEY FOUND' "$LOG"; then
+  printf 'RESULTADO: %s\n' "$(grep -a 'KEY FOUND' "$LOG" | tail -1 | sed 's/\x1b\[[0-9;]*[A-Za-z]//g')"
+else
+  printf 'RESULTADO: clave no encontrada con este diccionario.\n'
+fi
+printf 'Log: %s\n' "$LOG"
+linea
+exit 0

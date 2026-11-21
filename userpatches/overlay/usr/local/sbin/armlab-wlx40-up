@@ -1,0 +1,15 @@
+#!/bin/sh
+# Dejar la tarjeta de auditoria wlx40 arriba en modo managed.
+# No toca wlan0 ni eth0.
+i=0
+while [ "$i" -lt 120 ]; do
+  [ -d /sys/class/net/wlx40 ] && break
+  sleep 0.5
+  i=$((i+1))
+done
+[ -d /sys/class/net/wlx40 ] || exit 0
+
+/sbin/ip link set wlx40 up
+/sbin/iw dev wlx40 set type managed 2>/dev/null || true
+/sbin/iw dev wlx40 set txpower fixed 1300 2>/dev/null || true
+exit 0

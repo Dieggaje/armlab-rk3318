@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lanzador de escritorio para Auditoria WiFi en el RK3318
+exec /usr/bin/xfce4-terminal \
+  --title="AUDITORIA WiFi - Todas las redes - RK3318" \
+  --geometry=100x30 \
+  --command=/usr/local/bin/capturar-crack-terminal

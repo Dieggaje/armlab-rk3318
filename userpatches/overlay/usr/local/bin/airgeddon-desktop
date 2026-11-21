@@ -1,0 +1,7 @@
+#!/bin/sh
+# Lanzador de escritorio para Airgeddon en el RK3318
+# sudo reinicia el entorno: hay que pasar DISPLAY/XAUTHORITY explicitamente.
+exec /usr/bin/xfce4-terminal \
+  --title="Airgeddon - RK3318" \
+  --geometry=100x30 \
+  --command="sudo DISPLAY=:0 XAUTHORITY=/home/diego/.Xauthority XDG_RUNTIME_DIR=/run/user/$(id -u diego) sh -c 'cd /opt/armlab/auditoria-wifi/airgeddon && exec bash ./airgeddon.sh'"

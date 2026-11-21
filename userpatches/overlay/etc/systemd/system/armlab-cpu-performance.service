@@ -1,0 +1,11 @@
+[Unit]
+Description=ArmLab WiFi - Gobernador CPU performance (sin overclock)
+After=multi-user.target cpufrequtils.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/armlab-cpu-performance
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Dejar wlx40 UP en modo managed (auditoria)
+After=NetworkManager.service 8814au-txpower.service
+Wants=8814au-txpower.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/armlab-wlx40-up
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

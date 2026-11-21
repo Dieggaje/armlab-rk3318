@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lanzador de escritorio para Crackear captura guardada
+exec /usr/bin/xfce4-terminal \
+  --title="CRACKEAR CAPTURA - RK3318" \
+  --geometry=100x30 \
+  --command=/usr/local/bin/crackear-captura-terminal

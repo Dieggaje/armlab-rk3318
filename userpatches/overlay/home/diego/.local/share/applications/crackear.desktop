@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Crackear captura guardada
+GenericName=Analizar .cap
+Comment=Prueba un handshake guardado con cualquier diccionario, sin recapturar
+Exec=/usr/local/bin/crackear-captura-desktop
+Icon=john
+Terminal=false
+StartupNotify=true
+Categories=Network;
+Keywords=wifi;cap;handshake;aircrack;diccionario;

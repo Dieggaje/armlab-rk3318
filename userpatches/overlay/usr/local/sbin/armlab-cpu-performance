@@ -1,0 +1,9 @@
+#!/bin/sh
+# ArmLab WiFi: fijar el gobernador 'performance' en los 4 nucleos.
+# No cambia la frecuencia maxima (sin overclock): solo evita bajar a 600/816 MHz.
+for cpu in /sys/devices/system/cpu/cpu[0-9]; do
+    gov="$cpu/cpufreq/scaling_governor"
+    [ -f "$gov" ] || continue
+    echo performance > "$gov" 2>/dev/null || true
+done
+exit 0

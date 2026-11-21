@@ -1,0 +1,8 @@
+#!/bin/sh
+# Devuelve el nombre de la interfaz del adaptador RTL8814AU
+for n in /sys/class/net/*; do
+  [ -e "$n/device/driver" ] || continue
+  drv=$(basename "$(readlink -f "$n/device/driver" 2>/dev/null)" 2>/dev/null)
+  if [ "$drv" = "rtl8814au" ]; then basename "$n"; exit 0; fi
+done
+exit 1

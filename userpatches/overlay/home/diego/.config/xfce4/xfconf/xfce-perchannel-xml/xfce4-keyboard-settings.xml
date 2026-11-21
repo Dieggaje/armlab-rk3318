@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfce4-keyboard-settings" version="1.0">
+  <property name="xkbmap" type="empty">
+    <property name="layout" type="string" value="es"/>
+    <property name="model" type="string" value="pc105"/>
+  </property>
+</channel>
