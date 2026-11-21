@@ -7,6 +7,6 @@ CH=${1:-11}
 ip link set "$IF" up || exit 1
 iw dev "$IF" set type monitor || exit 1
 iw dev "$IF" set monitor otherbss fcsfail || exit 1
-iw dev "$IF" set channel "$CH" || exit 1
+iwconfig "$IF" channel "$CH" || exit 1
 echo "Monitor ON: $IF  canal $CH"
 iw dev "$IF" info | grep -iE "type|channel" | head -3

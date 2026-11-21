@@ -102,7 +102,8 @@ choose() {
       [Rr]*) do_scan; monitor_on || return 1 ;;
       *)
         if [[ "$k" =~ ^[0-9]+$ ]] && [ "$k" -ge 1 ] && [ "$k" -le "${#BSSIDS[@]}" ]; then
-          local i=$((k-1)) ch="${CHANS[$i]}"
+          local i=$((k-1))
+          local ch="${CHANS[$i]}"
           mkdir -p "$CAPDIR"
           {
             printf 'BSSID=%s\n' "${BSSIDS[$i]}"
@@ -112,7 +113,7 @@ choose() {
             printf 'IFACE=%s\n' "$IFACE"
             printf 'FECHA=%s\n' "$(date '+%F %T')"
           } > "$FILE"
-          [ "$ch" != '?' ] && iw dev "$IFACE" set channel "$ch" 2>/dev/null || true
+          [ "$ch" != '?' ] && iwconfig "$IFACE" channel "$ch" 2>/dev/null || true
           cls
           line
           row "OBJETIVO SELECCIONADO"

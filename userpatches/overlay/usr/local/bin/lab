@@ -177,7 +177,7 @@ mon_on() {
   ip link set "$SEL" up 2>/dev/null
   iw dev "$SEL" set type monitor || { pause; return 0; }
   iw dev "$SEL" set monitor otherbss fcsfail || { pause; return 0; }
-  iw dev "$SEL" set channel "$ch" || { pause; return 0; }
+  iwconfig "$SEL" channel "$ch" || { pause; return 0; }
   printf '\n  Monitor ON: %s  canal %s\n' "$SEL" "$ch"
   pause
 }
@@ -229,38 +229,7 @@ scan_live() {
 
 capture_passive() {
   need_iface || return 0
-  mkdir -p "$CAPDIR"
-  local ch band base
-  local -a chargs=(-F)
-  printf 'Canal (0=todos) [0]: '
-  read -r ch || true
-  ch=${ch:-0}
-  if ! [[ "$ch" =~ ^[0-9]+$ ]]; then
-    printf '\n  Canal no valido\n'
-    pause
-    return 0
-  fi
-  base="$CAPDIR/hcx-$(date +%Y%m%d-%H%M%S)"
-  if [ "$ch" != 0 ]; then
-    band=a
-    [ "$ch" -gt 14 ] && band=b
-    chargs=(-c "${ch}${band}")
-  fi
-  printf '\n  Capturando ... Ctrl+C convierte a .22000\n'
-  run_int_wrapper /usr/bin/hcxdumptool -i "$SEL" -w "$base.pcapng" \
-    "${chargs[@]}" --rds=1 \
-    --disable_deauthentication --disable_proberequest \
-    --disable_association --disable_reassociation \
-    --attemptapmax=0
-  printf '\n  Convirtiendo a hc22000 ...\n'
-  /usr/bin/hcxpcapngtool -o "$base.22000" "$base.pcapng" \
-    > "$base.conv.log" 2>&1
-  printf '  pcapng : %s\n  22000  : %s\n' "$base.pcapng" "$base.22000"
-  if [ -f "$base.22000" ]; then
-    printf '  hashes : %s\n' "$(wc -l < "$base.22000")"
-  else
-    printf '  hashes : 0 (sin capturas utiles; ver .conv.log)\n'
-  fi
+  /usr/local/bin/handshake
   pause
 }
 

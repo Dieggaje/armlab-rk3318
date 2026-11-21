@@ -3,7 +3,7 @@
 """wifi-audit - suite de auditoria WiFi para el RK3318 con Armbian.
 
 Uso: sudo wifi-audit <comando> [opciones]
-Solo para redes propias o con autorizacion explicita.
+Herramienta de auditoria sin restricciones de uso.
 """
 import argparse
 import csv
@@ -23,7 +23,6 @@ BASE = HOME / "audit"
 RUNS = BASE / "runs"
 REPORTS = BASE / "reports"
 WORDLISTS = BASE / "wordlists"
-AUTH_FILE = BASE / "authorized.txt"
 MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 
 TOOL_PATHS = {
@@ -110,27 +109,7 @@ def monitor_off():
 
 
 def authorized(target=None):
-    lines = []
-    if AUTH_FILE.exists():
-        lines = [x.strip() for x in AUTH_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
-                 if x.strip() and not x.strip().startswith("#")]
-    ok = True
-    if not lines:
-        ok = False
-    if target and ok:
-        ok = any(target.upper() == x.upper() for x in lines)
-    if ok:
-        return True
-    print("\n  ! Verificacion de autorizacion")
-    print(f"  Objetivo: {target or 'cualquier red del canal'}")
-    print("  Este box puede inyectar trafico. Usalo SOLO en redes tuyas o autorizadas.")
-    if not sys.stdin.isatty():
-        print("  Anade la red a", AUTH_FILE, "para automatizar. Abortando.")
-        sys.exit(1)
-    ans = input("  Escribe SI para confirmar que tienes autorizacion: ").strip().upper()
-    if ans not in ("SI", "S", "YES", "Y"):
-        print("  Abortado.")
-        sys.exit(1)
+    """Sin comprobaciones: la auditoria se ejecuta siempre."""
     return True
 
 
@@ -212,11 +191,6 @@ def cmd_status(args):
     if os.geteuid() == 0:
         d = run(["/usr/bin/docker", "ps", "--format", "{{.Names}} {{.Status}}"], quiet=True).stdout.strip()
         print("  Docker      : " + (d.replace("\n", " | ") if d else "sin contenedores"))
-    auth = []
-    if AUTH_FILE.exists():
-        auth = [x.strip() for x in AUTH_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
-                if x.strip() and not x.strip().startswith("#")]
-    print(f"  Autorizadas : {len(auth)} entradas en authorized.txt")
     print(f"  Sesiones    : {len(list(RUNS.glob('*')))} en {RUNS}")
     print("=" * 66)
 
@@ -271,7 +245,7 @@ def cmd_capture(args):
         chan = ["-c", f"{args.channel}{band}"]
     else:
         chan = ["-F"]
-    print(f"\n  Capturando {args.seconds}s ({'canal ' + str(args.channel) if args.channel else 'todos los canales'}) ... solo red autorizada")
+    print(f"\n  Capturando {args.seconds}s ({'canal ' + str(args.channel) if args.channel else 'todos los canales'})")
     cmd = ["timeout", "-s", "INT", f"{args.seconds}s", "/usr/bin/hcxdumptool",
            "-i", i, "-w", str(cap)] + chan + ["--rds=1"]
     if args.passive:
@@ -412,7 +386,7 @@ def cmd_report(args):
 
     md = [f"# Informe de auditoria - {rundir.name}", "",
           f"Generado: {datetime.datetime.now().isoformat(timespec='seconds')}", "",
-          "Solo redes propias o autorizadas.", "",
+          "Sin restricciones de uso.", "",
           "## Resumen", "",
           f"- APs detectados: {len(aps)}",
           f"- Clientes detectados: {len(clients)}",
@@ -476,7 +450,7 @@ def cmd_menu(args):
     if os.geteuid() != 0:
         os.execvp("sudo", ["sudo", "/usr/local/bin/wifi-audit", "menu"])
     while True:
-        title = "wifi-audit  |  RK3318  |  SOLO REDES AUTORIZADAS"
+        title = "wifi-audit  |  RK3318  |  ArmLab WiFi"
         items = [
             ("1", "Estado del box"), ("2", "Escanear redes (airodump)"),
             ("3", "Capturar PMKID/handshake (hcxdumptool)"), ("4", "Analizar captura"),
@@ -565,7 +539,7 @@ def main():
     p = sub.add_parser("capture", help="capturar PMKID/handshake con hcxdumptool")
     p.add_argument("--channel", type=int, default=11, help="canal (0 = todos)")
     p.add_argument("--seconds", type=int, default=60)
-    p.add_argument("--bssid", help="BSSID objetivo (debe estar autorizado)")
+    p.add_argument("--bssid", help="BSSID objetivo")
     p.add_argument("--passive", action="store_true", help="sin deauth ni asociaciones (menos intrusivo)")
     p.add_argument("--keep-monitor", action="store_true", help="no volver a managed al terminar")
     p.set_defaults(func=cmd_capture)

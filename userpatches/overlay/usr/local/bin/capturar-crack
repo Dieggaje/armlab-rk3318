@@ -228,7 +228,7 @@ capturar_red() {
   printf 'Objetivo: %s  canal %s' "$BSSID" "$CH"
   [ -n "$CLIENT_TARGET" ] && printf '  cliente: %s' "$CLIENT_TARGET"
   printf '\n'
-  iw dev "$IFACE" set channel "$CH" 2>/dev/null || true
+  iwconfig "$IFACE" channel "$CH" 2>/dev/null || true
 
   base="$CAPDIR/handshake-$(date +%Y%m%d-%H%M%S-%N)"
   cap="$base-01.cap"

